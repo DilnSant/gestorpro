@@ -72,7 +72,28 @@ export function criarApp() {
         (erro as { code?: string })?.code ??
         'desconhecido';
       const nome = erro instanceof Error ? erro.name : 'ErroDesconhecido';
-      res.status(503).json({ ok: false, db: 'indisponível', codigo, nome });
+
+      // A mensagem do Prisma às vezes embute a connection string inteira, com
+      // senha. Redigir qualquer URL de banco antes de responder — o motivo da
+      // falha é útil, a credencial não pode sair daqui.
+      const motivo = (erro instanceof Error ? erro.message : String(erro))
+        .replace(/postgres(ql)?:\/\/[^\s"']+/gi, '***')
+        .replace(/\s+/g, ' ')
+        .slice(0, 400);
+
+      res.status(503).json({
+        ok: false,
+        db: 'indisponível',
+        codigo,
+        nome,
+        motivo,
+        // Quais variáveis o runtime enxerga. Só a presença, nunca o valor.
+        variaveis: {
+          DATABASE_URL: Boolean(process.env.DATABASE_URL),
+          DIRECT_URL: Boolean(process.env.DIRECT_URL),
+          JWT_SECRET: Boolean(process.env.JWT_SECRET),
+        },
+      });
     }
   });
 
