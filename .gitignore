@@ -36,3 +36,6 @@ backend/.agents/
 backend/.claude/
 backend/.cursor/
 backend/.devin/
+
+# Cache de build do TypeScript
+*.tsbuildinfo
