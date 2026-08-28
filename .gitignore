@@ -1,0 +1,38 @@
+# Dependências
+node_modules/
+
+# Builds
+dist/
+build/
+
+# Variáveis de ambiente
+.env
+.env.local
+.env.*.local
+
+# Banco de dados local
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Arquivos enviados pelos usuários
+backend/uploads/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editores e sistema
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Resíduo do "prisma skills sync" (comando inexistente no Prisma 5).
+# Quatro cópias idênticas da documentação de @prisma/composer, biblioteca que
+# este projeto não usa. Podem ser apagadas do disco com segurança.
+backend/.agents/
+backend/.claude/
+backend/.cursor/
+backend/.devin/

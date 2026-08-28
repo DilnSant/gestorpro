@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id         String   @id @default(uuid())
+  email      String   @unique
+  password   String
+  name       String
+  role       String   @default("owner") // "admin" ou "owner"
+  company_id String?
+  company    Company? @relation(fields: [company_id], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Company {
+  id            String         @id @default(uuid())
+  name          String
+  logo_url      String?
+  primary_color String         @default("#2563EB")
+  phone         String?
+  email         String?
+  address       String?
+  cnpj          String?
+  domain        String?
+  users         User[]
+  clients       Client[]
+  vehicles      Vehicle[]
+  serviceOrders ServiceOrder[]
+  quotes        Quote[]
+  notes         Note[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model Client {
+  id         String         @id @default(uuid())
+  company_id String
+  company    Company        @relation(fields: [company_id], references: [id])
+  name       String
+  cpf_cnpj   String?
+  phone      String?
+  email      String?
+  address    String?
+  notes      String?
+  vehicles   Vehicle[]
+  orders     ServiceOrder[]
+  quotes     Quote[]
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+}
+
+model Vehicle {
+  id          String         @id @default(uuid())
+  company_id  String
+  company     Company        @relation(fields: [company_id], references: [id])
+  client_id   String
+  client      Client         @relation(fields: [client_id], references: [id])
+  client_name String?
+  plate       String
+  brand       String?
+  model       String?
+  year        Int?
+  color       String?
+  km          Int?
+  chassis     String?
+  orders      ServiceOrder[]
+  quotes      Quote[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model ServiceOrder {
+  id              String    @id @default(uuid())
+  company_id      String
+  company         Company   @relation(fields: [company_id], references: [id])
+  order_number    String
+  client_id       String
+  client          Client    @relation(fields: [client_id], references: [id])
+  client_name     String?
+  vehicle_id      String
+  vehicle         Vehicle   @relation(fields: [vehicle_id], references: [id])
+  vehicle_info    String?
+  status          String    @default("pending") // pending, in_progress, waiting_parts, completed, delivered, cancelled
+  entry_date      DateTime?
+  estimated_date  DateTime?
+  completion_date DateTime?
+  description     String?
+  items           String?   // JSON stringified array
+  labor_total     Float     @default(0)
+  parts_total     Float     @default(0)
+  discount        Float     @default(0)
+  total_amount    Float     @default(0)
+  notes           String?
+  from_quote_id   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Quote {
+  id                 String    @id @default(uuid())
+  company_id         String
+  company            Company   @relation(fields: [company_id], references: [id])
+  quote_number       String
+  client_id          String
+  client             Client    @relation(fields: [client_id], references: [id])
+  client_name        String?
+  vehicle_id         String
+  vehicle            Vehicle   @relation(fields: [vehicle_id], references: [id])
+  vehicle_info       String?
+  status             String    @default("draft") // draft, sent, approved, rejected, converted
+  valid_until        DateTime?
+  description        String?
+  items              String?   // JSON stringified array
+  labor_total        Float     @default(0)
+  parts_total        Float     @default(0)
+  discount           Float     @default(0)
+  total_amount       Float     @default(0)
+  notes              String?
+  converted_to_os_id String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+model Note {
+  id         String   @id @default(uuid())
+  company_id String
+  company    Company  @relation(fields: [company_id], references: [id])
+  title      String
+  content    String?
+  type       String   @default("general") // general, service_order, client, vehicle
+  related_id String?
+  file_urls  String?  // JSON stringified array
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
