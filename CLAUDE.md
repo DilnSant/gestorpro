@@ -35,8 +35,10 @@ Sete modelos: `User`, `Company`, `Client`, `Vehicle`, `ServiceOrder` (OS), `Quot
 (orçamento), `Note`.
 
 O fluxo central do negócio: um `Client` tem `Vehicle`s. Sobre um veículo cria-se um
-`Quote`; aprovado, ele vira uma `ServiceOrder` (o vínculo é `Quote.converted_to_os_id`
-e `ServiceOrder.from_quote_id`). A OS caminha por `pending → in_progress →
+`Quote`; aprovado, ele vira uma `ServiceOrder`. O vínculo é uma relação de verdade:
+`ServiceOrder.from_quote_id` aponta para o orçamento, e `Quote.converted_to` é o lado
+recíproco. A conversão roda em transação e é irreversível — orçamento convertido não
+aceita mais edição nem exclusão. A OS caminha por `pending → in_progress →
 waiting_parts → completed → delivered`, ou `cancelled`.
 
 ## Regras inegociáveis
