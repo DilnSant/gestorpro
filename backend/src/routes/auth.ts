@@ -27,11 +27,18 @@ const CAMPOS_PUBLICOS = {
 
 // Sem limite de tentativas, a política de senha não vale nada: dá para testar
 // milhares por minuto.
+//
+// A suíte de testes cria dezenas de contas do mesmo endereço, então o limite por
+// IP é desligado ali. O bloqueio por tentativas erradas (que é por conta, não por
+// IP) continua valendo e continua sendo testado.
+const limitePorIpDesligado = process.env.NODE_ENV === 'test';
+
 const limiteLogin = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => limitePorIpDesligado,
   message: { error: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' },
 });
 
@@ -40,6 +47,7 @@ const limiteCadastro = rateLimit({
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => limitePorIpDesligado,
   message: { error: 'Muitas contas criadas a partir daqui. Tente novamente mais tarde.' },
 });
 
