@@ -7,102 +7,118 @@ Status: `pendente` → `em execução` → `em revisão` → `concluída` / `dev
 
 ---
 
-## Crítico — decidir antes de mais código depender disso
+## Crítico
 
-| ID | Tarefa | Dono | Status |
-|----|--------|------|--------|
-| 01 | Trocar `Float` por `Int` (centavos) nos 8 campos monetários de `ServiceOrder` e `Quote` | estrategista → programador | **pendente** |
-| 02 | `@@unique([company_id, order_number])`, `([company_id, quote_number])`, `([company_id, plate])` | estrategista → programador | **pendente** |
-| 03 | `items String?` → tabelas `ServiceOrderItem` e `QuoteItem` | estrategista → programador | **pendente** |
-| 04 | Índices `@@index([company_id, ...])` em Client, Vehicle, ServiceOrder, Quote, Note, User | programador | **pendente** |
-| 05 | `updateMe` e `setup-company` aceitam `userId` do corpo — IDOR. Só se resolve com o 08 | auditor-seguranca | **pendente** |
-| 06 | `User.company_id` opcional → `where: { company_id: undefined }` no Prisma **não filtra** | estrategista | **pendente** |
-| 07 | `res.json({ user })` devolvia o campo `password` | programador | ✅ concluída |
+| ID | Tarefa | Status |
+|----|--------|--------|
+| 01 | `Float` → `Int` em centavos nos campos monetários | ✅ concluída |
+| 02 | `@@unique` por tenant em `order_number`, `quote_number` e `plate` | ✅ concluída |
+| 03 | `items String?` → tabelas `ServiceOrderItem` e `QuoteItem` | ✅ concluída |
+| 04 | Índices `@@index([company_id, ...])` em todos os modelos | ✅ concluída |
+| 05 | IDOR em `updateMe` / `setup-company` (`userId` vindo do corpo) | ✅ concluída |
+| 06 | `where: { company_id: undefined }` não filtrava e vazava todos os tenants | ✅ concluída |
+| 07 | `res.json({ user })` devolvia o campo `password` | ✅ concluída |
 
-**Mitigação parcial aplicada em 01:** os totais passaram a ser somados em centavos
-inteiros no servidor (`src/lib/documentos.ts`) e só o resultado final vira decimal. Isso
-elimina o acúmulo de erro item a item, mas a coluna continua sendo `REAL` no banco — a
-correção definitiva ainda é necessária.
+**Verificado sobre o 01:** `Decimal` **não** resolve no SQLite — a afinidade
+NUMERIC armazena como `real` de qualquer forma. Por isso `Int` em centavos, com o
+sufixo `_cents` no nome da coluna para a unidade não se perder. A conversão para
+reais acontece só na borda da API, em `src/lib/dinheiro.ts`.
 
-**Verificado:** `Decimal` **não** resolve no SQLite. A afinidade NUMERIC armazena como
-`real` de qualquer forma. Centavos em `Int` é a única opção segura enquanto o provider
-for SQLite.
+**Sobre o 04:** o banco saiu de 1 índice para 29. O SQLite não cria índice
+automático para foreign key (diferente do MySQL), então toda listagem filtrada por
+`company_id` varria a tabela inteira, incluindo as linhas de outras oficinas.
 
 ---
 
 ## Alto
 
-| ID | Tarefa | Dono | Status |
-|----|--------|------|--------|
-| 08 | Autenticação real: hash de senha, JWT verificado, rate limit. Hoje o login não pede senha e o tenant vem de um header do cliente | estrategista → programador | **pendente** |
-| 09 | `User.email @unique` global bloqueia a mesma pessoa em duas oficinas | estrategista | **pendente** |
-| 10 | `onDelete` explícito nas 11 relações | estrategista → programador | **pendente** |
-| 11 | `url = "file:./dev.db"` hardcoded → `env("DATABASE_URL")`. Sem isso, teste roda contra o banco de desenvolvimento | programador | **pendente** |
-| 12 | Validação de entrada em todas as rotas | programador | ✅ concluída |
-| 13 | Vínculo Quote↔ServiceOrder sem `@relation` no schema | estrategista | **pendente** |
+| ID | Tarefa | Status |
+|----|--------|--------|
+| 08 | Autenticação real: argon2id, JWT, rate limit, bloqueio por tentativas | ✅ concluída |
+| 09 | `User.email @unique` global bloqueia a mesma pessoa em duas oficinas | **pendente** |
+| 10 | `onDelete` explícito nas relações | ✅ concluída |
+| 11 | `DATABASE_URL` vindo do `.env` | ✅ concluída |
+| 12 | Validação de entrada em todas as rotas | ✅ concluída |
+| 13 | Relação real entre `Quote` e `ServiceOrder` | ✅ concluída |
 
-**Sobre o 08 — a dívida mais séria em aberto.** O `x-company-id` continua vindo do
-cliente. Qualquer um que descubra o id de uma empresa lê e escreve os dados dela. Existe
-uma guarda que derruba o servidor se `NODE_ENV=production`, mas isso é um freio, não uma
-solução. Corrigir exige mudar frontend e backend juntos.
-
-O caminho de bypass mais grave já foi fechado: `x-role: admin` dispensava o
-`x-company-id` e o filtro do Prisma sumia, expondo todos os tenants de uma vez.
+**Sobre o 09 — a decisão que ficou.** O modelo atual é uma conta por oficina, com
+o admin trocando de contexto por impersonação. Isso atende ao produto como
+especificado, mas impede que a mesma pessoa (um contador, por exemplo) tenha conta
+em duas oficinas. Resolver exige uma tabela `Membership` e mudar o formato do
+token — decisão de produto, não de código, e cara de reverter depois. Vale decidir
+antes de haver base de usuários.
 
 ---
 
 ## Médio
 
-| ID | Tarefa | Dono | Status |
-|----|--------|------|--------|
-| 14 | `tsconfig.json` no backend com `esModuleInterop` e `strict` | programador | ✅ concluída |
-| 15 | Remover `prisma.config.ts` morto e o `postinstall` quebrado | programador | ✅ concluída |
-| 16 | Remover `sqlite3` das dependências | programador | ✅ concluída |
-| 17 | `git init` + primeiro commit (o `.gitignore` já existe) | — | **pendente** |
-| 18 | Remover `Vehicle.client_name` — duplicação sem função de snapshot | programador | **pendente** |
-| 19 | `client_name`/`vehicle_info` em OS e Quote: tornar obrigatórios, sufixo `_snapshot` | estrategista | **pendente** |
-| 20 | `role` com default `"owner"` (o mais privilegiado) e sem validação | programador | **pendente** |
-| 21 | `total_amount` recalculado num único ponto, nunca aceito do cliente | programador | ✅ concluída |
-| 22 | Infraestrutura de teste automatizado. Existe uma suíte de ponta a ponta manual (34 casos), mas nenhum runner no projeto | qa-testes | **pendente** |
-| 23 | `cors()` sem origem definida | programador | **pendente** |
-| 24 | `routes/auth.ts`, `company.ts`, `notes.ts`, `quotes.ts` estavam com 0 bytes | programador | ✅ concluída |
-| 31 | `setup-company` criava a empresa e só depois vinculava o usuário; falha deixava empresa órfã | programador | ✅ concluída |
-| 32 | Frontend sem `strict` no tsconfig — o backend tem, o frontend não | programador | **pendente** |
-| 33 | `PrismaClient` instanciado por arquivo de rota, cada um com seu pool | programador | ✅ concluída |
+| ID | Tarefa | Status |
+|----|--------|--------|
+| 14 | `tsconfig.json` no backend com `esModuleInterop` e `strict` | ✅ concluída |
+| 15 | Remover `prisma.config.ts` morto e `postinstall` quebrado | ✅ concluída |
+| 16 | Remover `sqlite3` das dependências | ✅ concluída |
+| 17 | `git init` + repositório remoto | ✅ concluída |
+| 18 | Remover `Vehicle.client_name` | ✅ concluída |
+| 19 | Snapshots obrigatórios e nomeados em OS e orçamento | ✅ concluída |
+| 20 | `role` validado e nunca lido do corpo da requisição | ✅ concluída |
+| 21 | `total_amount` recalculado num único ponto | ✅ concluída |
+| 22 | Suíte de testes automatizada | ✅ concluída |
+| 23 | `cors()` sem origem definida | ✅ concluída |
+| 24 | Arquivos de rota com 0 bytes | ✅ concluída |
+| 31 | `setup-company` deixava empresa órfã ao falhar | ✅ concluída |
+| 32 | Frontend sem `strict` no tsconfig | ✅ concluída |
+| 33 | `PrismaClient` instanciado por arquivo de rota | ✅ concluída |
+| 35 | Sem `CHECK` constraint no `role` — a garantia é só de aplicação | **pendente** |
+
+**Sobre o 20 e o 35.** O SQLite não suporta `enum` no Prisma 5, então `role` é
+`String`. Um `CHECK` no banco seria defesa a mais, mas o Prisma não o representa
+no schema e ele apareceria como drift em toda migração futura. A garantia ficou em
+`src/lib/roles.ts`: o papel nunca é lido do corpo de uma requisição, só atribuído
+a partir da lista canônica. Há teste cobrindo isso.
 
 ---
 
 ## Baixo
 
-| ID | Tarefa | Dono | Status |
-|----|--------|------|--------|
-| 25 | `Company.cnpj` e `Company.domain` sem `@unique` | programador | **pendente** |
-| 26 | `@@unique([company_id, cpf_cnpj])` em Client | programador | **pendente** |
-| 27 | Padronizar nomenclatura: campos `snake_case`, timestamps `camelCase` | programador | **pendente** |
-| 28 | Soft delete (`deleted_at`) em Client, ServiceOrder e Quote | estrategista | **pendente** |
-| 29 | Autoria (`created_by_id`) em OS e Quote | estrategista | **pendente** |
-| 30 | `Note.related_id` polimórfico, sem FK possível | estrategista | **pendente** |
-| 34 | Anexos de nota não são excluídos do disco ao apagar a nota | programador | **pendente** |
+| ID | Tarefa | Status |
+|----|--------|--------|
+| 25 | `Company.cnpj` e `Company.domain` sem `@unique` | ✅ concluída |
+| 26 | `@@unique([company_id, cpf_cnpj])` em Client | ✅ concluída |
+| 27 | Padronizar `snake_case` vs `camelCase` nos timestamps | **pendente** |
+| 28 | Soft delete (`deleted_at`) em Client, ServiceOrder e Quote | **pendente** |
+| 29 | Autoria (`created_by_id`) em OS e Quote | **pendente** |
+| 30 | `Note.related_id` polimórfico, sem FK possível | **pendente** |
+| 34 | Anexos de nota não são excluídos do disco ao apagar a nota | **pendente** |
+| 36 | Testes do frontend (hoje só o backend tem suíte) | **pendente** |
+| 37 | Recuperação de senha por e-mail | **pendente** |
 
 ---
 
 ## Cobertura da especificação
 
-| Item | Situação |
-|------|----------|
-| CompanySetup, Dashboard, ServiceOrders, ServiceOrderForm | ✅ |
-| Quotes, QuoteForm, conversão em OS | ✅ |
-| Clients, Vehicles, Notes (com upload), CompanySettings, AdminPanel | ✅ |
-| PageHeader, StatusBadge, EmptyState, ItemsEditor, Skeleton | ✅ |
-| Sidebar com drawer no mobile, "Voltar ao Admin", impersonação | ✅ |
-| Numeração automática por empresa, react-query, CompanyContext | ✅ |
-| Badges coloridos das 11 situações, estados vazios, responsivo, pt-BR | ✅ |
-| Upload de arquivos | ✅ via `/api/upload` (multer, disco local) em vez do `base44.integrations.Core.UploadFile` do spec original |
+Todas as 11 páginas, os componentes compartilhados, a numeração automática por
+empresa, a impersonação de admin, o upload de arquivos, os badges das 11
+situações, os estados vazios, o skeleton e o layout responsivo estão implementados.
+
+Uma divergência deliberada: a especificação original usa `base44.auth.updateMe` e
+`base44.integrations.Core.UploadFile`. O projeto não é base44 — é Express +
+Prisma — então o upload foi feito com multer em disco local e a autenticação com
+JWT próprio.
+
+---
+
+## Verificação
+
+```
+backend:  npm test    → 53 testes, 3 arquivos
+backend:  npx tsc --noEmit
+frontend: npx tsc -b && npm run build
+```
 
 ---
 
 ## Avaliações registradas
 
-| Data | Entrega | Agente | Nota | Veredito |
-|------|---------|--------|------|----------|
-| 2026-08-27 | `backend/prisma/schema.prisma` | (Antigravity IDE) | **4,0** | Reprovado — 5 defeitos crítico/alto na fundação, um parcialmente irreversível |
+| Data | Entrega | Nota | Veredito |
+|------|---------|------|----------|
+| 2026-08-27 | `schema.prisma` (versão inicial) | **4,0** | Reprovado — 5 defeitos crítico/alto na fundação. Todos corrigidos na migração `fundacao_dados`. |
