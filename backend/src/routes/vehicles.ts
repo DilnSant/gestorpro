@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../prisma';
-import { requireCompanyId } from '../middleware/authMiddleware';
+import { rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
-router.use(requireCompanyId);
+router.use(rotaDaEmpresa);
 
 // `plate` é obrigatória no schema e não aceita null; as demais são opcionais.
 const CAMPOS_TEXTO = ['brand', 'model', 'color', 'chassis'] as const;

@@ -1,5 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import {
+  api,
+  descartarToken,
+  guardarToken,
+  lerToken,
+  registrarExpiracaoDeSessao,
+} from '../lib/api';
 
 export type Empresa = {
   id: string;
@@ -17,21 +23,23 @@ export type Usuario = {
   company?: Empresa | null;
 };
 
+type RespostaAutenticacao = { token: string; user: Usuario };
+
 type ContextoEmpresa = {
   user: Usuario | null;
   isLoading: boolean;
-  /** Nome da empresa quando um admin está acessando como ela. */
+  /** Nome da oficina quando um admin está acessando como ela. */
   impersonando: string | null;
-  login: (email: string) => Promise<void>;
+  login: (email: string, senha: string) => Promise<void>;
+  cadastrar: (nome: string, email: string, senha: string) => Promise<void>;
   logout: () => void;
-  updateCompanyId: (companyId: string) => Promise<void>;
+  acessarComoEmpresa: (companyId: string, nome: string) => Promise<void>;
   sairDaImpersonacao: () => Promise<void>;
   setupCompany: (dados: Record<string, unknown>) => Promise<void>;
 };
 
 const CompanyContext = createContext<ContextoEmpresa | undefined>(undefined);
 
-const CHAVE_USUARIO = 'gestorpro_user';
 const CHAVE_IMPERSONACAO = 'gestorpro_impersonando';
 
 const aplicarCorPrimaria = (cor?: string | null) => {
@@ -43,87 +51,98 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [impersonando, setImpersonando] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    try {
-      const salvo = localStorage.getItem(CHAVE_USUARIO);
-      if (salvo) {
-        const usuario = JSON.parse(salvo) as Usuario;
-        setUser(usuario);
-        aplicarCorPrimaria(usuario.company?.primary_color);
-      }
-      setImpersonando(localStorage.getItem(CHAVE_IMPERSONACAO));
-    } catch {
-      // localStorage corrompido ou indisponível: começa deslogado em vez de quebrar.
-      localStorage.removeItem(CHAVE_USUARIO);
-    }
-    setIsLoading(false);
+  const encerrar = useCallback(() => {
+    setUser(null);
+    setImpersonando(null);
+    descartarToken();
+    localStorage.removeItem(CHAVE_IMPERSONACAO);
   }, []);
 
-  const guardar = useCallback((usuario: Usuario) => {
+  // O servidor derrubar o token (expirado ou inválido) precisa derrubar a tela
+  // junto — do contrário o app fica mostrando dados de uma sessão que já morreu.
+  useEffect(() => registrarExpiracaoDeSessao(encerrar), [encerrar]);
+
+  // A sessão é restaurada perguntando ao servidor quem é o dono do token, não
+  // lendo um usuário guardado no navegador: só o servidor sabe se ainda vale.
+  useEffect(() => {
+    if (!lerToken()) {
+      setIsLoading(false);
+      return;
+    }
+    api
+      .get<Usuario>('/api/auth/me')
+      .then((usuario) => {
+        setUser(usuario);
+        aplicarCorPrimaria(usuario.company?.primary_color);
+        setImpersonando(localStorage.getItem(CHAVE_IMPERSONACAO));
+      })
+      .catch(() => encerrar())
+      .finally(() => setIsLoading(false));
+  }, [encerrar]);
+
+  const guardarSessao = useCallback(({ token, user: usuario }: RespostaAutenticacao) => {
+    guardarToken(token);
     setUser(usuario);
-    localStorage.setItem(CHAVE_USUARIO, JSON.stringify(usuario));
     aplicarCorPrimaria(usuario.company?.primary_color);
   }, []);
 
   // Estas funções propagam o erro em vez de só registrar no console: é o que
   // permite a tela mostrar ao usuário o que deu errado.
   const login = useCallback(
-    async (email: string) => {
-      const { user: usuario } = await api.post<{ token: string; user: Usuario }>(
-        '/api/auth/login',
-        { email },
+    async (email: string, password: string) => {
+      guardarSessao(await api.post<RespostaAutenticacao>('/api/auth/login', { email, password }));
+    },
+    [guardarSessao],
+  );
+
+  const cadastrar = useCallback(
+    async (name: string, email: string, password: string) => {
+      guardarSessao(
+        await api.post<RespostaAutenticacao>('/api/auth/register', { name, email, password }),
       );
-      guardar(usuario);
     },
-    [guardar],
+    [guardarSessao],
   );
-
-  const logout = useCallback(() => {
-    setUser(null);
-    setImpersonando(null);
-    localStorage.removeItem(CHAVE_USUARIO);
-    localStorage.removeItem(CHAVE_IMPERSONACAO);
-  }, []);
-
-  const updateCompanyId = useCallback(
-    async (company_id: string) => {
-      if (!user) throw new Error('Nenhum usuário conectado.');
-      const atualizado = await api.post<Usuario>('/api/auth/updateMe', {
-        userId: user.id,
-        company_id,
-      });
-      guardar(atualizado);
-      setImpersonando(localStorage.getItem(CHAVE_IMPERSONACAO));
-    },
-    [user, guardar],
-  );
-
-  const sairDaImpersonacao = useCallback(async () => {
-    if (!user) throw new Error('Nenhum usuário conectado.');
-    const atualizado = await api.post<Usuario>('/api/auth/updateMe', {
-      userId: user.id,
-      company_id: null,
-    });
-    localStorage.removeItem(CHAVE_IMPERSONACAO);
-    setImpersonando(null);
-    guardar(atualizado);
-  }, [user, guardar]);
 
   const setupCompany = useCallback(
     async (dados: Record<string, unknown>) => {
-      if (!user) throw new Error('Nenhum usuário conectado.');
-      const atualizado = await api.post<Usuario>('/api/auth/setup-company', {
-        userId: user.id,
-        ...dados,
-      });
-      guardar(atualizado);
+      // O token é reemitido com o company_id novo — sem isso as requisições
+      // seguintes continuariam sem oficina.
+      guardarSessao(await api.post<RespostaAutenticacao>('/api/auth/setup-company', dados));
     },
-    [user, guardar],
+    [guardarSessao],
   );
+
+  const acessarComoEmpresa = useCallback(
+    async (company_id: string, nome: string) => {
+      guardarSessao(await api.post<RespostaAutenticacao>('/api/auth/impersonate', { company_id }));
+      localStorage.setItem(CHAVE_IMPERSONACAO, nome);
+      setImpersonando(nome);
+    },
+    [guardarSessao],
+  );
+
+  const sairDaImpersonacao = useCallback(async () => {
+    guardarSessao(
+      await api.post<RespostaAutenticacao>('/api/auth/impersonate', { company_id: null }),
+    );
+    localStorage.removeItem(CHAVE_IMPERSONACAO);
+    setImpersonando(null);
+  }, [guardarSessao]);
 
   return (
     <CompanyContext.Provider
-      value={{ user, isLoading, impersonando, login, logout, updateCompanyId, sairDaImpersonacao, setupCompany }}
+      value={{
+        user,
+        isLoading,
+        impersonando,
+        login,
+        cadastrar,
+        logout: encerrar,
+        acessarComoEmpresa,
+        sairDaImpersonacao,
+        setupCompany,
+      }}
     >
       {children}
     </CompanyContext.Provider>

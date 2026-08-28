@@ -35,22 +35,26 @@ Sete modelos: `User`, `Company`, `Client`, `Vehicle`, `ServiceOrder` (OS), `Quot
 (orçamento), `Note`.
 
 O fluxo central do negócio: um `Client` tem `Vehicle`s. Sobre um veículo cria-se um
-`Quote`; aprovado, ele vira uma `ServiceOrder` (o vínculo é `Quote.converted_to_os_id`
-e `ServiceOrder.from_quote_id`). A OS caminha por `pending → in_progress →
+`Quote`; aprovado, ele vira uma `ServiceOrder`. O vínculo é uma relação de verdade:
+`ServiceOrder.from_quote_id` aponta para o orçamento, e `Quote.converted_to` é o lado
+recíproco. A conversão roda em transação e é irreversível — orçamento convertido não
+aceita mais edição nem exclusão. A OS caminha por `pending → in_progress →
 waiting_parts → completed → delivered`, ou `cancelled`.
 
 ## Regras inegociáveis
 
 **1. Isolamento por tenant.** Toda query de dado de negócio filtra por `company_id`.
-O `company_id` vem **sempre** do token autenticado — nunca do corpo, da query string
-ou de parâmetro de rota. Um endpoint que aceita `company_id` do cliente é uma falha de
-segurança, não uma conveniência.
+O `company_id` vem **sempre** do token JWT verificado (`req.companyId`, populado por
+`rotaDaEmpresa`) — nunca do corpo, da query string, de header ou de parâmetro de rota.
+Cuidado com o filtro que *parece* existir: `where: { company_id: undefined }` no Prisma
+não filtra nada e devolve todos os tenants.
 
 **2. Identidade vem do token.** Nenhuma rota aceita `userId` do corpo da requisição
 para decidir sobre quem age. Vale para update, delete e leitura.
 
-**3. Dinheiro não é `Float`.** Ponto flutuante binário não representa 0,10 exatamente e
-o erro acumula em soma de itens e desconto. Valores monetários são inteiros em centavos.
+**3. Dinheiro é `Int` em centavos.** As colunas têm o sufixo `_cents` para a unidade
+não se perder. A conversão para reais acontece só na borda, em `src/lib/dinheiro.ts`.
+`Decimal` não resolve no SQLite: a afinidade NUMERIC armazena como `real` do mesmo jeito.
 
 **4. Senha nunca em texto puro.** Hash com bcrypt/argon2 na escrita; comparação por
 função de verificação na leitura. Nenhuma resposta de API devolve o campo `password`.
@@ -68,10 +72,20 @@ clientes finais. LGPD se aplica. Nada disso vai para log.
 - Rotas REST sob `/api/<recurso>`, uma por arquivo em `src/routes/`.
 - Toda rota autenticada passa pelo middleware de autenticação — sem exceção pontual.
 
+## Verificação antes de dizer que está pronto
+
+```
+cd backend  && npm test && npx tsc --noEmit
+cd frontend && npx tsc -b && npm run build
+```
+
+Os testes rodam contra `backend/tests/teste.db`, nunca contra o `dev.db`.
+
 ## Estado atual (2026-08-27)
 
-Projeto recém-criado, em construção ativa. O frontend ainda é o boilerplate do Vite.
-O backend tem schema, migration inicial e as primeiras rotas.
+Backend e frontend completos conforme a especificação, com 53 testes passando.
+Autenticação real (argon2id + JWT), dinheiro em centavos, itens relacionais e
+isolamento por tenant verificado por teste.
 
 Pendências conhecidas estão em `BACKLOG.md`. Antes de abrir tarefa nova, leia o backlog:
-vários itens já estão mapeados com dono e severidade.
+os itens restantes já estão mapeados com severidade e justificativa.

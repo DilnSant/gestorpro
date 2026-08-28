@@ -1,34 +1,39 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
-import { requireCompanyId } from '../middleware/authMiddleware';
+import { rotaDaEmpresa } from '../middleware/authMiddleware';
 import {
   STATUS_OS,
   extrairCamposComuns,
   processarItens,
   proximoNumero,
+  serializarDocumento,
   validarClienteEVeiculo,
 } from '../lib/documentos';
 
 const router = Router();
 
-router.use(requireCompanyId);
+router.use(rotaDaEmpresa);
 
 const CAMPOS_DATA = ['entry_date', 'estimated_date', 'completion_date'] as const;
+const COM_ITENS = { items: { orderBy: { position: 'asc' } } } as const;
 
 router.get('/', async (req, res) => {
-  const orders = await prisma.serviceOrder.findMany({
+  const ordens = await prisma.serviceOrder.findMany({
     where: { company_id: req.companyId },
     orderBy: { createdAt: 'desc' },
+    include: COM_ITENS,
   });
-  res.json(orders);
+  res.json(ordens.map(serializarDocumento));
 });
 
 router.get('/:id', async (req, res) => {
-  const order = await prisma.serviceOrder.findFirst({
+  const ordem = await prisma.serviceOrder.findFirst({
     where: { id: req.params.id, company_id: req.companyId },
+    include: COM_ITENS,
   });
-  if (!order) return res.status(404).json({ error: 'Ordem de serviço não encontrada.' });
-  res.json(order);
+  if (!ordem) return res.status(404).json({ error: 'Ordem de serviço não encontrada.' });
+  res.json(serializarDocumento(ordem));
 });
 
 router.post('/', async (req, res) => {
@@ -43,31 +48,43 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Informe o cliente e o veículo da ordem de serviço.' });
   }
 
-  const vinculo = await validarClienteEVeiculo(clientId, vehicleId, req.companyId);
-  if ('erro' in vinculo) return res.status(400).json({ error: vinculo.erro });
+  const snapshots = await validarClienteEVeiculo(clientId, vehicleId, req.companyId);
+  if ('erro' in snapshots) return res.status(400).json({ error: snapshots.erro });
 
   const resultado = processarItens(body.items, body.discount);
   if ('erro' in resultado) return res.status(400).json({ error: resultado.erro });
 
-  try {
-    const order = await prisma.serviceOrder.create({
-      data: {
-        ...dados,
-        ...resultado.totais,
-        items: JSON.stringify(resultado.itens),
-        client_id: clientId,
-        vehicle_id: vehicleId,
-        client_name: vinculo.client_name,
-        vehicle_info: vinculo.vehicle_info,
-        company_id: req.companyId,
-        order_number: await proximoNumero('os', req.companyId),
-        entry_date: (dados.entry_date as Date | null | undefined) ?? new Date(),
-      },
-    });
-    res.status(201).json(order);
-  } catch (error) {
-    res.status(400).json({ error: 'Não foi possível criar a ordem de serviço.' });
+  // Duas requisições simultâneas podem calcular o mesmo número. O @@unique
+  // transforma isso em P2002 e o retry pega o número seguinte.
+  for (let tentativa = 0; tentativa < 3; tentativa++) {
+    try {
+      const ordem = await prisma.serviceOrder.create({
+        data: {
+          ...dados,
+          ...resultado.totais,
+          ...snapshots,
+          client_id: clientId,
+          vehicle_id: vehicleId,
+          company_id: req.companyId,
+          order_number: await proximoNumero('os', req.companyId),
+          entry_date: (dados.entry_date as Date | null | undefined) ?? new Date(),
+          items: {
+            create: resultado.itens.map((item) => ({ ...item, company_id: req.companyId })),
+          },
+        },
+        include: COM_ITENS,
+      });
+      return res.status(201).json(serializarDocumento(ordem));
+    } catch (error) {
+      const numeroEmUso =
+        error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+      if (!numeroEmUso) {
+        return res.status(400).json({ error: 'Não foi possível criar a ordem de serviço.' });
+      }
+    }
   }
+
+  res.status(409).json({ error: 'Muitas ordens sendo criadas ao mesmo tempo. Tente de novo.' });
 });
 
 router.put('/:id', async (req, res) => {
@@ -83,41 +100,48 @@ router.put('/:id', async (req, res) => {
 
   if (body.client_id !== undefined || body.vehicle_id !== undefined) {
     const clientId = typeof body.client_id === 'string' ? body.client_id.trim() : atual.client_id;
-    const vehicleId = typeof body.vehicle_id === 'string' ? body.vehicle_id.trim() : atual.vehicle_id;
+    const vehicleId =
+      typeof body.vehicle_id === 'string' ? body.vehicle_id.trim() : atual.vehicle_id;
 
-    const vinculo = await validarClienteEVeiculo(clientId, vehicleId, req.companyId);
-    if ('erro' in vinculo) return res.status(400).json({ error: vinculo.erro });
+    const snapshots = await validarClienteEVeiculo(clientId, vehicleId, req.companyId);
+    if ('erro' in snapshots) return res.status(400).json({ error: snapshots.erro });
 
-    Object.assign(dados, {
-      client_id: clientId,
-      vehicle_id: vehicleId,
-      client_name: vinculo.client_name,
-      vehicle_info: vinculo.vehicle_info,
-    });
+    Object.assign(dados, snapshots, { client_id: clientId, vehicle_id: vehicleId });
   }
 
-  // Recalcula sempre que a lista de itens vier — e nunca aceita total pronto.
-  if (body.items !== undefined) {
-    const resultado = processarItens(body.items, body.discount);
-    if ('erro' in resultado) return res.status(400).json({ error: resultado.erro });
-    Object.assign(dados, resultado.totais, { items: JSON.stringify(resultado.itens) });
-  }
-
-  // Concluir a OS carimba a data de conclusão, se ainda não houver uma.
+  // Concluir a OS carimba a data, se ainda não houver uma.
   if (dados.status === 'completed' && !atual.completion_date && dados.completion_date === undefined) {
     dados.completion_date = new Date();
   }
 
-  const { count } = await prisma.serviceOrder.updateMany({
-    where: { id: req.params.id, company_id: req.companyId },
-    data: dados,
-  });
-  if (count === 0) return res.status(404).json({ error: 'Ordem de serviço não encontrada.' });
+  let itensNovos: Awaited<ReturnType<typeof processarItens>> | null = null;
+  if (body.items !== undefined) {
+    itensNovos = processarItens(body.items, body.discount);
+    if ('erro' in itensNovos) return res.status(400).json({ error: itensNovos.erro });
+    Object.assign(dados, itensNovos.totais);
+  }
 
-  const order = await prisma.serviceOrder.findFirst({
-    where: { id: req.params.id, company_id: req.companyId },
+  // Troca de itens e totais na mesma transação: sem isso, uma falha ao inserir os
+  // novos itens deixaria os totais já gravados sem os itens que os justificam.
+  const ordem = await prisma.$transaction(async (tx) => {
+    if (itensNovos && 'itens' in itensNovos) {
+      await tx.serviceOrderItem.deleteMany({ where: { service_order_id: atual.id } });
+      await tx.serviceOrderItem.createMany({
+        data: itensNovos.itens.map((item) => ({
+          ...item,
+          service_order_id: atual.id,
+          company_id: req.companyId,
+        })),
+      });
+    }
+    return tx.serviceOrder.update({
+      where: { id: atual.id },
+      data: dados,
+      include: COM_ITENS,
+    });
   });
-  res.json(order);
+
+  res.json(serializarDocumento(ordem));
 });
 
 router.delete('/:id', async (req, res) => {

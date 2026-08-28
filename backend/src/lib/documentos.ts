@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { paraCentavos, paraReais } from './dinheiro';
 
 // Lógica compartilhada por Ordem de Serviço e Orçamento: os dois documentos têm a
 // mesma estrutura de itens, os mesmos totais e a mesma numeração sequencial.
@@ -14,55 +15,43 @@ export const STATUS_OS = [
 
 export const STATUS_ORCAMENTO = ['draft', 'sent', 'approved', 'rejected', 'converted'] as const;
 
-// Os totais são dinheiro. O schema ainda usa Float (BACKLOG 01), então a soma é
-// feita em centavos inteiros e só o resultado final vira decimal — sem isso o erro
-// de ponto flutuante se acumula item a item e a conta do cliente fecha errada.
-export function paraCentavos(valor: unknown): number | null {
-  if (typeof valor === 'number') {
-    return Number.isFinite(valor) ? Math.round(valor * 100) : null;
-  }
-  if (typeof valor === 'string' && valor.trim() !== '') {
-    const numero = Number(valor.replace(',', '.'));
-    return Number.isFinite(numero) ? Math.round(numero * 100) : null;
-  }
-  return null;
-}
+export const TIPOS_ITEM = ['service', 'part'] as const;
 
-const paraReais = (centavos: number) => centavos / 100;
-
-export type Totais = {
-  labor_total: number;
-  parts_total: number;
-  discount: number;
-  total_amount: number;
-};
-
-type ItemBruto = { type?: unknown; description?: unknown; quantity?: unknown; unit_price?: unknown };
-
-export type ItemNormalizado = {
-  type: 'service' | 'part';
+export type ItemGravavel = {
+  type: string;
   description: string;
   quantity: number;
-  unit_price: number;
-  total: number;
+  unit_price_cents: number;
+  total_cents: number;
+  position: number;
 };
 
-export type ResultadoItens =
-  | { itens: ItemNormalizado[]; totais: Totais }
-  | { erro: string };
+export type Totais = {
+  labor_total_cents: number;
+  parts_total_cents: number;
+  discount_cents: number;
+  total_amount_cents: number;
+};
+
+export type ResultadoItens = { itens: ItemGravavel[]; totais: Totais } | { erro: string };
 
 /**
- * Valida a lista de itens e recalcula todos os totais no servidor.
+ * Valida a lista de itens vinda da requisição e recalcula tudo no servidor.
  *
- * O `total` de cada item é derivado de quantidade × preço unitário — nunca aceito
- * pronto do cliente, que poderia enviar `total: 0` numa peça de mil reais.
+ * O total de cada item é derivado de quantidade × preço unitário — nunca aceito
+ * pronto do cliente, que poderia mandar `total: 0` numa peça de mil reais.
  */
 export function processarItens(itemsBruto: unknown, descontoBruto: unknown): ResultadoItens {
-  let lista: unknown;
-  try {
-    lista = typeof itemsBruto === 'string' ? JSON.parse(itemsBruto) : itemsBruto;
-  } catch {
-    return { erro: 'A lista de itens está em formato inválido.' };
+  let lista: unknown = itemsBruto;
+
+  // O frontend manda array; aceitar string JSON mantém compatibilidade com
+  // clientes antigos sem obrigar os dois lados a mudarem juntos.
+  if (typeof itemsBruto === 'string') {
+    try {
+      lista = JSON.parse(itemsBruto);
+    } catch {
+      return { erro: 'A lista de itens está em formato inválido.' };
+    }
   }
 
   if (lista === null || lista === undefined) lista = [];
@@ -70,71 +59,75 @@ export function processarItens(itemsBruto: unknown, descontoBruto: unknown): Res
     return { erro: 'A lista de itens está em formato inválido.' };
   }
 
-  const itens: ItemNormalizado[] = [];
-  let laborCentavos = 0;
-  let partsCentavos = 0;
+  const itens: ItemGravavel[] = [];
+  let maoDeObra = 0;
+  let pecas = 0;
 
   for (const [indice, bruto] of lista.entries()) {
     const posicao = indice + 1;
+
     if (typeof bruto !== 'object' || bruto === null) {
       return { erro: `O item ${posicao} está incompleto.` };
     }
-    const item = bruto as ItemBruto;
+    const item = bruto as Record<string, unknown>;
 
-    if (item.type !== 'service' && item.type !== 'part') {
+    if (!TIPOS_ITEM.includes(item.type as (typeof TIPOS_ITEM)[number])) {
       return { erro: `O item ${posicao} precisa ser peça ou serviço.` };
     }
 
-    const description = typeof item.description === 'string' ? item.description.trim() : '';
-    if (!description) {
-      return { erro: `Descreva o item ${posicao}.` };
-    }
+    const descricao = typeof item.description === 'string' ? item.description.trim() : '';
+    if (!descricao) return { erro: `Descreva o item ${posicao}.` };
 
     const quantidade = Number(item.quantity);
     if (!Number.isFinite(quantidade) || quantidade <= 0) {
       return { erro: `A quantidade do item ${posicao} é inválida.` };
     }
 
-    // Antes: `labor_total += item.total` sem validação. Um `total` em string
-    // transformava a soma em concatenação ("0" + "10" = "010") e gravava lixo.
-    const precoUnitario = paraCentavos(item.unit_price);
-    if (precoUnitario === null || precoUnitario < 0) {
+    // Aceita `unit_price` (reais, o que a API expõe) ou `unit_price_cents`.
+    const precoUnitario =
+      item.unit_price_cents !== undefined
+        ? Number(item.unit_price_cents)
+        : paraCentavos(item.unit_price);
+
+    if (precoUnitario === null || !Number.isFinite(precoUnitario) || precoUnitario < 0) {
       return { erro: `O preço do item ${posicao} é inválido.` };
     }
 
     const totalItem = Math.round(precoUnitario * quantidade);
-    if (item.type === 'service') laborCentavos += totalItem;
-    else partsCentavos += totalItem;
+    if (item.type === 'service') maoDeObra += totalItem;
+    else pecas += totalItem;
 
     itens.push({
-      type: item.type,
-      description,
+      type: item.type as string,
+      description: descricao,
       quantity: quantidade,
-      unit_price: paraReais(precoUnitario),
-      total: paraReais(totalItem),
+      unit_price_cents: Math.round(precoUnitario),
+      total_cents: totalItem,
+      position: indice,
     });
   }
 
-  const descontoCentavos = descontoBruto === undefined || descontoBruto === null || descontoBruto === ''
-    ? 0
-    : paraCentavos(descontoBruto);
+  const desconto =
+    descontoBruto === undefined || descontoBruto === null || descontoBruto === ''
+      ? 0
+      : paraCentavos(descontoBruto);
 
-  if (descontoCentavos === null || descontoCentavos < 0) {
+  if (desconto === null || desconto < 0) {
     return { erro: 'O desconto informado é inválido.' };
   }
 
-  const subtotal = laborCentavos + partsCentavos;
-  if (descontoCentavos > subtotal) {
+  const subtotal = maoDeObra + pecas;
+  if (desconto > subtotal) {
     return { erro: 'O desconto não pode ser maior que o total do documento.' };
   }
 
   return {
     itens,
     totais: {
-      labor_total: paraReais(laborCentavos),
-      parts_total: paraReais(partsCentavos),
-      discount: paraReais(descontoCentavos),
-      total_amount: paraReais(subtotal - descontoCentavos),
+      labor_total_cents: maoDeObra,
+      parts_total_cents: pecas,
+      discount_cents: desconto,
+      total_amount_cents: subtotal - desconto,
     },
   };
 }
@@ -145,14 +138,11 @@ export function processarItens(itemsBruto: unknown, descontoBruto: unknown): Res
  * Ordena por número, não por data: duas criações no mesmo instante (a precisão de
  * datetime do SQLite é grosseira) davam o mesmo "último" e o mesmo número novo.
  *
- * BACKLOG 02 — ainda há corrida entre requisições simultâneas. O
- * @@unique([company_id, order_number]) é o que transformaria isso num erro
- * tratável (P2002) em vez de uma duplicata silenciosa.
+ * A corrida entre requisições simultâneas continua existindo, mas agora o
+ * @@unique([company_id, order_number]) a transforma em P2002, que as rotas tratam
+ * com retry — em vez de gravar duas OS com o mesmo número em silêncio.
  */
-export async function proximoNumero(
-  tipo: 'os' | 'orcamento',
-  companyId: string,
-): Promise<string> {
+export async function proximoNumero(tipo: 'os' | 'orcamento', companyId: string): Promise<string> {
   const prefixo = tipo === 'os' ? 'OS-' : 'ORC-';
 
   const ultimo =
@@ -177,19 +167,24 @@ export async function proximoNumero(
   return `${prefixo}${String(proximo).padStart(4, '0')}`;
 }
 
+export type Snapshots = {
+  client_name_snapshot: string;
+  vehicle_plate_snapshot: string;
+  vehicle_desc_snapshot: string;
+};
+
 /**
- * Confirma que cliente e veículo existem, pertencem à empresa e combinam entre si.
+ * Confirma que cliente e veículo existem, pertencem à empresa e combinam entre si,
+ * e devolve os dados congelados do documento.
  *
- * Sem isto dá para criar um documento na própria empresa apontando para o cliente
- * de outra: a foreign key aceita, porque o banco não sabe nada sobre tenant.
- * Devolve também os textos desnormalizados que o schema espera (client_name,
- * vehicle_info) — a tela lê esses campos sem precisar de join.
+ * Sem esta checagem dá para criar um documento na própria empresa apontando para o
+ * cliente de outra: a foreign key aceita, porque o banco não sabe nada sobre tenant.
  */
 export async function validarClienteEVeiculo(
   clientId: string,
   vehicleId: string,
   companyId: string,
-): Promise<{ erro: string } | { client_name: string; vehicle_info: string }> {
+): Promise<{ erro: string } | Snapshots> {
   const [cliente, veiculo] = await Promise.all([
     prisma.client.findFirst({
       where: { id: clientId, company_id: companyId },
@@ -197,7 +192,7 @@ export async function validarClienteEVeiculo(
     }),
     prisma.vehicle.findFirst({
       where: { id: vehicleId, company_id: companyId },
-      select: { id: true, client_id: true, plate: true, brand: true, model: true },
+      select: { id: true, client_id: true, plate: true, brand: true, model: true, year: true },
     }),
   ]);
 
@@ -207,10 +202,12 @@ export async function validarClienteEVeiculo(
     return { erro: 'O veículo informado não pertence a esse cliente.' };
   }
 
-  const descricao = [veiculo.brand, veiculo.model].filter(Boolean).join(' ');
+  const descricao = [veiculo.brand, veiculo.model, veiculo.year].filter(Boolean).join(' ');
+
   return {
-    client_name: cliente.name,
-    vehicle_info: descricao ? `${veiculo.plate} - ${descricao}` : veiculo.plate,
+    client_name_snapshot: cliente.name,
+    vehicle_plate_snapshot: veiculo.plate,
+    vehicle_desc_snapshot: descricao || 'Veículo sem descrição',
   };
 }
 
@@ -253,4 +250,62 @@ export function extrairCamposComuns(
   }
 
   return dados;
+}
+
+// ---------------------------------------------------------------------------
+// Serialização
+//
+// O banco fala centavos e colunas com sufixo `_snapshot`; a API fala reais e os
+// nomes que o frontend já usa. A tradução acontece só aqui.
+// ---------------------------------------------------------------------------
+
+type ItemDoBanco = {
+  type: string;
+  description: string;
+  quantity: number;
+  unit_price_cents: number;
+  total_cents: number;
+};
+
+type DocumentoDoBanco = {
+  client_name_snapshot: string;
+  vehicle_plate_snapshot: string;
+  vehicle_desc_snapshot: string;
+  labor_total_cents: number;
+  parts_total_cents: number;
+  discount_cents: number;
+  total_amount_cents: number;
+  items?: ItemDoBanco[];
+};
+
+export function serializarDocumento<T extends DocumentoDoBanco>(doc: T) {
+  const {
+    client_name_snapshot,
+    vehicle_plate_snapshot,
+    vehicle_desc_snapshot,
+    labor_total_cents,
+    parts_total_cents,
+    discount_cents,
+    total_amount_cents,
+    items,
+    ...resto
+  } = doc;
+
+  return {
+    ...resto,
+    client_name: client_name_snapshot,
+    vehicle_info: `${vehicle_plate_snapshot} - ${vehicle_desc_snapshot}`,
+    vehicle_plate: vehicle_plate_snapshot,
+    labor_total: paraReais(labor_total_cents),
+    parts_total: paraReais(parts_total_cents),
+    discount: paraReais(discount_cents),
+    total_amount: paraReais(total_amount_cents),
+    items: (items ?? []).map((item) => ({
+      type: item.type,
+      description: item.description,
+      quantity: item.quantity,
+      unit_price: paraReais(item.unit_price_cents),
+      total: paraReais(item.total_cents),
+    })),
+  };
 }

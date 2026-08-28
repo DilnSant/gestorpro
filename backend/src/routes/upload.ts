@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { Router } from 'express';
 import multer from 'multer';
-import { requireCompanyId } from '../middleware/authMiddleware';
+import { rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -37,7 +37,7 @@ const upload = multer({
   },
 });
 
-router.use(requireCompanyId);
+router.use(rotaDaEmpresa);
 
 router.post('/', (req, res) => {
   upload.array('files', 5)(req, res, (erro: unknown) => {

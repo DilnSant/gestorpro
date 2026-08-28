@@ -1,36 +1,76 @@
 import { Request, Response, NextFunction } from 'express';
+import { verificarToken } from '../lib/auth';
+import { ehAdmin, type Papel } from '../lib/roles';
 
-// ATENÇÃO — DÍVIDA DE SEGURANÇA CONHECIDA (BACKLOG 08)
+// A identidade vem do token assinado, nunca da requisição.
 //
-// Este middleware ainda confia no header `x-company-id` enviado pelo cliente.
-// Isso NÃO é autenticação: qualquer um que descubra o id de uma empresa lê e
-// escreve os dados dela. A correção definitiva é o `company_id` vir de um JWT
-// verificado no servidor, e exige mudar frontend e backend juntos.
-//
-// O que já foi fechado aqui: o caminho em que `companyId` chegava indefinido e
-// o filtro do Prisma deixava de existir, expondo TODOS os tenants de uma vez.
+// Antes deste arquivo, o tenant chegava no header `x-company-id` e o papel no
+// `x-role` — ambos escolhidos pelo cliente. Bastava trocar o header para ler os
+// dados de qualquer oficina, e `x-role: admin` dispensava o company_id, momento
+// em que `where: { company_id: undefined }` deixava de filtrar e devolvia todos
+// os tenants de uma vez.
 
 declare global {
   namespace Express {
     interface Request {
+      usuario: { id: string; role: Papel; company_id: string | null };
+      /// Só existe depois de `exigirEmpresa`. String não vazia, garantida.
       companyId: string;
     }
   }
 }
 
-export const requireCompanyId = (req: Request, res: Response, next: NextFunction) => {
-  const companyId = req.headers['x-company-id'];
+function lerToken(req: Request): string | null {
+  const cabecalho = req.headers.authorization;
+  if (typeof cabecalho !== 'string') return null;
+  const [tipo, valor] = cabecalho.split(' ');
+  if (tipo !== 'Bearer' || !valor) return null;
+  return valor;
+}
 
-  // Precisa ser string não-vazia. Header ausente vem `undefined`; header repetido
-  // vem como array — e um array escaparia de uma checagem de truthiness ingênua.
-  if (typeof companyId !== 'string' || companyId.trim() === '') {
-    return res.status(401).json({ error: 'Empresa não identificada na requisição.' });
+/** Exige um token válido. Popula `req.usuario`. */
+export function exigirAutenticacao(req: Request, res: Response, next: NextFunction) {
+  const token = lerToken(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Faça login para continuar.' });
   }
 
-  // O header `x-role` foi removido de propósito. Antes, `x-role: admin` dispensava
-  // o `x-company-id`, e o handler seguia com `companyId === undefined`. Em Prisma,
-  // `where: { company_id: undefined }` não filtra nada: `GET /api/clients` devolvia
-  // os clientes de todas as empresas. Papel nunca pode vir de header do cliente.
-  req.companyId = companyId.trim();
+  const conteudo = verificarToken(token);
+  if (!conteudo) {
+    return res.status(401).json({ error: 'Sua sessão expirou. Entre novamente.' });
+  }
+
+  req.usuario = { id: conteudo.sub, role: conteudo.role, company_id: conteudo.company_id };
   next();
-};
+}
+
+/**
+ * Exige que o usuário autenticado tenha uma empresa. Popula `req.companyId`.
+ *
+ * A checagem de string não vazia é o que impede o `undefined` de chegar a um
+ * `where` do Prisma e apagar o filtro de tenant.
+ */
+export function exigirEmpresa(req: Request, res: Response, next: NextFunction) {
+  const empresa = req.usuario?.company_id;
+
+  if (typeof empresa !== 'string' || empresa.trim() === '') {
+    return res.status(403).json({
+      error: 'Nenhuma oficina selecionada. Conclua o cadastro da empresa para continuar.',
+    });
+  }
+
+  req.companyId = empresa;
+  next();
+}
+
+/** Rotas da plataforma, restritas ao dono dela. */
+export function exigirAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!ehAdmin(req.usuario?.role)) {
+    // 404 em vez de 403: não confirma para um usuário comum que a rota existe.
+    return res.status(404).json({ error: 'Não encontrado.' });
+  }
+  next();
+}
+
+/** Atalho para as rotas de negócio: autenticado E com empresa. */
+export const rotaDaEmpresa = [exigirAutenticacao, exigirEmpresa];
