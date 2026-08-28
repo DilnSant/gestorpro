@@ -1,6 +1,7 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
-import { rotaDaEmpresa } from '../middleware/authMiddleware';
+import { empresaDaRequisicao, rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -41,7 +42,7 @@ function extrairCampos(body: unknown): DadosCliente {
 
 router.get('/', async (req, res) => {
   const clients = await prisma.client.findMany({
-    where: { company_id: req.companyId },
+    where: { company_id: empresaDaRequisicao(req) },
     orderBy: { name: 'asc' },
   });
   res.json(clients);
@@ -56,7 +57,7 @@ router.post('/', async (req, res) => {
 
   try {
     const client = await prisma.client.create({
-      data: { ...dados, name: dados.name, company_id: req.companyId },
+      data: { ...dados, name: dados.name, company_id: empresaDaRequisicao(req) },
     });
     res.status(201).json(client);
   } catch (error) {
@@ -75,16 +76,27 @@ router.put('/:id', async (req, res) => {
   // updateMany em vez de update: o `where` composto garante que só uma linha da
   // própria empresa é alcançada, e o count permite responder 404 em vez de vazar
   // a existência de um cliente de outra empresa.
-  const { count } = await prisma.client.updateMany({
-    where: { id, company_id: req.companyId },
-    data: dados,
-  });
+  //
+  // O try/catch existe porque o POST já mapeava P2002 para 400 e o PUT não —
+  // a mesma violação de unicidade devolvia 500 conforme o verbo.
+  let count: number;
+  try {
+    ({ count } = await prisma.client.updateMany({
+      where: { id, company_id: empresaDaRequisicao(req) },
+      data: dados,
+    }));
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return res.status(409).json({ error: 'Já existe outro cliente com esse CPF ou CNPJ.' });
+    }
+    return res.status(400).json({ error: 'Não foi possível atualizar o cliente.' });
+  }
 
   if (count === 0) {
     return res.status(404).json({ error: 'Cliente não encontrado.' });
   }
 
-  const client = await prisma.client.findFirst({ where: { id, company_id: req.companyId } });
+  const client = await prisma.client.findFirst({ where: { id, company_id: empresaDaRequisicao(req) } });
   res.json(client);
 });
 
@@ -92,7 +104,7 @@ router.delete('/:id', async (req, res) => {
   const { id } = req.params;
 
   const { count } = await prisma.client.deleteMany({
-    where: { id, company_id: req.companyId },
+    where: { id, company_id: empresaDaRequisicao(req) },
   });
 
   if (count === 0) {

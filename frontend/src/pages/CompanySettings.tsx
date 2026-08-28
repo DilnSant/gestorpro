@@ -5,8 +5,11 @@ import PageHeader from '../components/PageHeader';
 
 type Empresa = {
   id: string;
-  name: string;
+  /** Referência persistida. É esta que volta no PUT. */
   logo_url: string | null;
+  /** URL assinada, só para renderizar. Gravá-la daria link morto em uma hora. */
+  logo_view_url: string | null;
+  name: string;
   primary_color: string;
   phone: string | null;
   email: string | null;
@@ -16,7 +19,10 @@ type Empresa = {
 
 const CompanySettings = () => {
   const queryClient = useQueryClient();
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  // Duas variáveis de propósito: a referência que se persiste e a URL assinada
+  // que se renderiza. Confundi-las grava no banco um link que expira.
+  const [logoRef, setLogoRef] = useState<string | null>(null);
+  const [logoView, setLogoView] = useState<string | null>(null);
   const [cor, setCor] = useState('#2563EB');
   const [enviandoLogo, setEnviandoLogo] = useState(false);
   const [erro, setErro] = useState('');
@@ -29,7 +35,8 @@ const CompanySettings = () => {
 
   useEffect(() => {
     if (empresa) {
-      setLogoUrl(empresa.logo_url);
+      setLogoRef(empresa.logo_url);
+      setLogoView(empresa.logo_view_url);
       setCor(empresa.primary_color || '#2563EB');
     }
   }, [empresa]);
@@ -56,7 +63,8 @@ const CompanySettings = () => {
     setEnviandoLogo(true);
     try {
       const { files } = await api.upload([arquivos[0]!]);
-      setLogoUrl(files[0]?.url ?? null);
+      setLogoRef(files[0]?.url ?? null);
+      setLogoView(files[0]?.view_url ?? null);
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Não foi possível enviar a logo.');
     } finally {
@@ -75,7 +83,7 @@ const CompanySettings = () => {
       cnpj: form.get('cnpj'),
       address: form.get('address'),
       primary_color: cor,
-      logo_url: logoUrl,
+      logo_url: logoRef,
     });
   };
 
@@ -137,9 +145,9 @@ const CompanySettings = () => {
 
             <div className="field full">
               <label htmlFor="logo">Logo</label>
-              {logoUrl && (
+              {logoView && (
                 <img
-                  src={api.urlArquivo(logoUrl)}
+                  src={api.urlArquivo(logoView)}
                   alt="Logo da empresa"
                   style={{ maxWidth: '160px', maxHeight: '80px', objectFit: 'contain', marginBottom: '0.5rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.5rem' }}
                 />
@@ -154,12 +162,15 @@ const CompanySettings = () => {
               {enviandoLogo && (
                 <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>Enviando…</p>
               )}
-              {logoUrl && (
+              {logoRef && (
                 <button
                   type="button"
                   className="btn-secondary"
                   style={{ alignSelf: 'flex-start', marginTop: '0.5rem' }}
-                  onClick={() => setLogoUrl(null)}
+                  onClick={() => {
+                    setLogoRef(null);
+                    setLogoView(null);
+                  }}
                 >
                   Remover logo
                 </button>

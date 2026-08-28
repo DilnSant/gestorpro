@@ -54,13 +54,18 @@ describe('cadastro', () => {
     expect(r.body.user.role).toBe('owner');
   });
 
-  it('recusa e-mail já cadastrado', async () => {
-    const r = await req('POST', '/api/auth/register', {
+  it('não revela, no cadastro, que o e-mail já tem conta', async () => {
+    const existente = await req('POST', '/api/auth/register', {
       name: 'Outro',
       email: 'dono@teste.com',
       password: 'senhaforte123',
     });
-    expect(r.status).toBe(409);
+
+    // Antes: 409 para existente e 200 para novo — um oráculo que enumera quem
+    // tem conta no sistema, sem autenticação nenhuma.
+    expect(existente.status).toBe(202);
+    expect(existente.body).not.toHaveProperty('token');
+    expect(JSON.stringify(existente.body)).not.toMatch(/já existe/i);
   });
 });
 
@@ -97,7 +102,8 @@ describe('login', () => {
     expect(r.body.token).toBeTruthy();
   });
 
-  it('bloqueia a conta após cinco tentativas erradas', async () => {
+  it('bloqueia a conta após cinco tentativas erradas, sem revelar que bloqueou', async () => {
+    const { prisma } = await import('../src/prisma');
     await req('POST', '/api/auth/register', {
       name: 'Alvo',
       email: 'alvo@teste.com',
@@ -109,11 +115,52 @@ describe('login', () => {
     }
 
     // Mesmo com a senha certa: o bloqueio é por tentativas, não por senha.
-    const r = await req('POST', '/api/auth/login', {
+    const bloqueado = await req('POST', '/api/auth/login', {
       email: 'alvo@teste.com',
       password: 'senhaforte123',
     });
-    expect(r.status).toBe(429);
+
+    // A resposta é idêntica à de credencial errada. Dizer "conta bloqueada"
+    // confirmaria que a conta existe.
+    const inexistente = await req('POST', '/api/auth/login', {
+      email: 'ninguem-mesmo@teste.com',
+      password: 'qualquer',
+    });
+    expect(bloqueado.status).toBe(inexistente.status);
+    expect(bloqueado.body.error).toBe(inexistente.body.error);
+
+    const registro = await prisma.user.findUnique({ where: { email: 'alvo@teste.com' } });
+    expect(registro?.locked_until).not.toBeNull();
+  });
+
+  it('libera a conta quando o bloqueio expira, sem contador acumulado', async () => {
+    const { prisma } = await import('../src/prisma');
+    await req('POST', '/api/auth/register', {
+      name: 'Preso',
+      email: 'preso@teste.com',
+      password: 'senhaforte123',
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await req('POST', '/api/auth/login', { email: 'preso@teste.com', password: 'errada' });
+    }
+
+    // Passa o tempo do bloqueio.
+    await prisma.user.update({
+      where: { email: 'preso@teste.com' },
+      data: { locked_until: new Date(Date.now() - 60_000) },
+    });
+
+    // Antes, o contador continuava em 5: UMA senha errada rebloqueava, e o
+    // atacante mantinha a conta fora do ar para sempre com uma requisição a cada
+    // 15 min. Agora o contador zera quando o bloqueio expira.
+    await req('POST', '/api/auth/login', { email: 'preso@teste.com', password: 'errada' });
+
+    const r = await req('POST', '/api/auth/login', {
+      email: 'preso@teste.com',
+      password: 'senhaforte123',
+    });
+    expect(r.status).toBe(200);
   });
 });
 
@@ -215,5 +262,68 @@ describe('troca de senha', () => {
       password: 'senhanova456',
     });
     expect(nova.status).toBe(200);
+  });
+});
+
+describe('revogação de sessão', () => {
+  it('invalida os tokens antigos ao trocar a senha', async () => {
+    const oficina = await criarOficina('Oficina Revoga', 'revoga@teste.com');
+
+    // O token funciona antes.
+    expect((await req('GET', '/api/clients', undefined, oficina.token)).status).toBe(200);
+
+    // Um segundo de folga: a comparação é por `iat`, em segundos.
+    await new Promise((r) => setTimeout(r, 1100));
+    const troca = await req(
+      'POST',
+      '/api/auth/change-password',
+      { current_password: 'senhaforte123', new_password: 'senhanova456' },
+      oficina.token,
+    );
+    expect(troca.status).toBe(200);
+
+    // Antes, o token anterior continuava válido por até 12h — justamente a ação
+    // que a vítima toma acreditando ter expulsado o invasor.
+    const depois = await req('GET', '/api/clients', undefined, oficina.token);
+    expect(depois.status).toBe(401);
+  });
+
+  it('invalida o token de impersonação ao voltar ao painel', async () => {
+    const { prisma } = await import('../src/prisma');
+    const admin = await criarOficina('Oficina Admin', 'admin-revoga@teste.com');
+    const alvo = await criarOficina('Oficina Alvo', 'alvo-revoga@teste.com');
+
+    await prisma.user.update({ where: { id: admin.userId }, data: { role: 'admin' } });
+    const login = await req('POST', '/api/auth/login', {
+      email: 'admin-revoga@teste.com',
+      password: 'senhaforte123',
+    });
+
+    const entrando = await req(
+      'POST',
+      '/api/auth/impersonate',
+      { company_id: alvo.companyId },
+      login.body.token,
+    );
+    const tokenImpersonado = entrando.body.token;
+
+    expect((await req('GET', '/api/clients', undefined, tokenImpersonado)).status).toBe(200);
+
+    await req('POST', '/api/auth/impersonate', { company_id: null }, tokenImpersonado);
+
+    // O token da impersonação precisa morrer junto. Comparar só o `iat` não
+    // separaria os dois: a troca acontece no mesmo segundo.
+    const depois = await req('GET', '/api/clients', undefined, tokenImpersonado);
+    expect(depois.status).toBe(401);
+  });
+
+  it('invalida o token de um usuário que deixou de existir', async () => {
+    const { prisma } = await import('../src/prisma');
+    const oficina = await criarOficina('Oficina Sumida', 'sumida@teste.com');
+
+    await prisma.user.delete({ where: { id: oficina.userId } });
+
+    const depois = await req('GET', '/api/clients', undefined, oficina.token);
+    expect(depois.status).toBe(401);
   });
 });

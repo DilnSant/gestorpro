@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
-import { rotaDaEmpresa } from '../middleware/authMiddleware';
+import { empresaDaRequisicao, rotaDaEmpresa } from '../middleware/authMiddleware';
 import {
   STATUS_OS,
   extrairCamposComuns,
@@ -20,7 +20,7 @@ const COM_ITENS = { items: { orderBy: { position: 'asc' } } } as const;
 
 router.get('/', async (req, res) => {
   const ordens = await prisma.serviceOrder.findMany({
-    where: { company_id: req.companyId },
+    where: { company_id: empresaDaRequisicao(req) },
     orderBy: { createdAt: 'desc' },
     include: COM_ITENS,
   });
@@ -29,7 +29,7 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   const ordem = await prisma.serviceOrder.findFirst({
-    where: { id: req.params.id, company_id: req.companyId },
+    where: { id: req.params.id, company_id: empresaDaRequisicao(req) },
     include: COM_ITENS,
   });
   if (!ordem) return res.status(404).json({ error: 'Ordem de serviço não encontrada.' });
@@ -48,7 +48,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Informe o cliente e o veículo da ordem de serviço.' });
   }
 
-  const snapshots = await validarClienteEVeiculo(clientId, vehicleId, req.companyId);
+  const snapshots = await validarClienteEVeiculo(clientId, vehicleId, empresaDaRequisicao(req));
   if ('erro' in snapshots) return res.status(400).json({ error: snapshots.erro });
 
   const resultado = processarItens(body.items, body.discount);
@@ -65,11 +65,11 @@ router.post('/', async (req, res) => {
           ...snapshots,
           client_id: clientId,
           vehicle_id: vehicleId,
-          company_id: req.companyId,
-          order_number: await proximoNumero('os', req.companyId),
+          company_id: empresaDaRequisicao(req),
+          order_number: await proximoNumero('os', empresaDaRequisicao(req)),
           entry_date: (dados.entry_date as Date | null | undefined) ?? new Date(),
           items: {
-            create: resultado.itens.map((item) => ({ ...item, company_id: req.companyId })),
+            create: resultado.itens.map((item) => ({ ...item, company_id: empresaDaRequisicao(req) })),
           },
         },
         include: COM_ITENS,
@@ -94,7 +94,7 @@ router.put('/:id', async (req, res) => {
   if ('__erro' in dados) return res.status(400).json({ error: dados.__erro });
 
   const atual = await prisma.serviceOrder.findFirst({
-    where: { id: req.params.id, company_id: req.companyId },
+    where: { id: req.params.id, company_id: empresaDaRequisicao(req) },
   });
   if (!atual) return res.status(404).json({ error: 'Ordem de serviço não encontrada.' });
 
@@ -103,7 +103,7 @@ router.put('/:id', async (req, res) => {
     const vehicleId =
       typeof body.vehicle_id === 'string' ? body.vehicle_id.trim() : atual.vehicle_id;
 
-    const snapshots = await validarClienteEVeiculo(clientId, vehicleId, req.companyId);
+    const snapshots = await validarClienteEVeiculo(clientId, vehicleId, empresaDaRequisicao(req));
     if ('erro' in snapshots) return res.status(400).json({ error: snapshots.erro });
 
     Object.assign(dados, snapshots, { client_id: clientId, vehicle_id: vehicleId });
@@ -130,7 +130,7 @@ router.put('/:id', async (req, res) => {
         data: itensNovos.itens.map((item) => ({
           ...item,
           service_order_id: atual.id,
-          company_id: req.companyId,
+          company_id: empresaDaRequisicao(req),
         })),
       });
     }
@@ -146,7 +146,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   const { count } = await prisma.serviceOrder.deleteMany({
-    where: { id: req.params.id, company_id: req.companyId },
+    where: { id: req.params.id, company_id: empresaDaRequisicao(req) },
   });
   if (count === 0) return res.status(404).json({ error: 'Ordem de serviço não encontrada.' });
   res.status(204).send();

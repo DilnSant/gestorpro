@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../prisma';
-import { rotaDaEmpresa } from '../middleware/authMiddleware';
+import { empresaDaRequisicao, rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -21,7 +21,7 @@ type DadosVeiculo = {
   km?: number | null;
 };
 
-function extrairCampos(body: unknown): DadosVeiculo {
+function extrairCampos(body: unknown): DadosVeiculo | { __erro: string } {
   const dados: DadosVeiculo = {};
   if (typeof body !== 'object' || body === null) return dados;
   const origem = body as Record<string, unknown>;
@@ -42,10 +42,17 @@ function extrairCampos(body: unknown): DadosVeiculo {
     if (valor === undefined) continue;
     if (valor === null || valor === '') {
       dados[campo] = null;
-    } else {
-      const numero = Number(valor);
-      if (Number.isFinite(numero)) dados[campo] = Math.trunc(numero);
+      continue;
     }
+    const numero = Number(valor);
+    // Number.isFinite não basta: 1e30 é finito, passa, e estoura o Int do banco
+    // — o Prisma lança e a resposta vira 500 com dump de PII no log.
+    if (!Number.isFinite(numero)) return { __erro: `O valor de ${campo} é inválido.` };
+    const inteiro = Math.trunc(numero);
+    if (!Number.isSafeInteger(inteiro) || inteiro < 0 || inteiro > 2_000_000_000) {
+      return { __erro: `O valor de ${campo} está fora da faixa aceita.` };
+    }
+    dados[campo] = inteiro;
   }
 
   if (typeof origem.client_id === 'string' && origem.client_id.trim() !== '') {
@@ -74,7 +81,7 @@ async function clientePertenceAEmpresa(clientId: string, companyId: string) {
 
 router.get('/', async (req, res) => {
   const vehicles = await prisma.vehicle.findMany({
-    where: { company_id: req.companyId },
+    where: { company_id: empresaDaRequisicao(req) },
     include: { client: { select: { id: true, name: true } } },
     orderBy: { plate: 'asc' },
   });
@@ -83,6 +90,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const dados = extrairCampos(req.body);
+  if ('__erro' in dados) return res.status(400).json({ error: dados.__erro });
 
   if (!dados.plate) {
     return res.status(400).json({ error: 'A placa é obrigatória.' });
@@ -90,7 +98,7 @@ router.post('/', async (req, res) => {
   if (!dados.client_id) {
     return res.status(400).json({ error: 'Informe o cliente dono do veículo.' });
   }
-  if (!(await clientePertenceAEmpresa(dados.client_id, req.companyId))) {
+  if (!(await clientePertenceAEmpresa(dados.client_id, empresaDaRequisicao(req)))) {
     return res.status(400).json({ error: 'Cliente não encontrado.' });
   }
 
@@ -100,7 +108,7 @@ router.post('/', async (req, res) => {
         ...dados,
         plate: dados.plate,
         client_id: dados.client_id,
-        company_id: req.companyId,
+        company_id: empresaDaRequisicao(req),
       },
     });
     res.status(201).json(vehicle);
@@ -112,16 +120,17 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const dados = extrairCampos(req.body);
+  if ('__erro' in dados) return res.status(400).json({ error: dados.__erro });
 
   if (dados.plate !== undefined && !dados.plate) {
     return res.status(400).json({ error: 'A placa não pode ficar em branco.' });
   }
-  if (dados.client_id && !(await clientePertenceAEmpresa(dados.client_id, req.companyId))) {
+  if (dados.client_id && !(await clientePertenceAEmpresa(dados.client_id, empresaDaRequisicao(req)))) {
     return res.status(400).json({ error: 'Cliente não encontrado.' });
   }
 
   const { count } = await prisma.vehicle.updateMany({
-    where: { id, company_id: req.companyId },
+    where: { id, company_id: empresaDaRequisicao(req) },
     data: dados,
   });
 
@@ -129,7 +138,7 @@ router.put('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Veículo não encontrado.' });
   }
 
-  const vehicle = await prisma.vehicle.findFirst({ where: { id, company_id: req.companyId } });
+  const vehicle = await prisma.vehicle.findFirst({ where: { id, company_id: empresaDaRequisicao(req) } });
   res.json(vehicle);
 });
 
@@ -137,7 +146,7 @@ router.delete('/:id', async (req, res) => {
   const { id } = req.params;
 
   const { count } = await prisma.vehicle.deleteMany({
-    where: { id, company_id: req.companyId },
+    where: { id, company_id: empresaDaRequisicao(req) },
   });
 
   if (count === 0) {

@@ -36,6 +36,9 @@ automático para foreign key (diferente do MySQL), então toda listagem filtrada
 |----|--------|--------|
 | 08 | Autenticação real: argon2id, JWT, rate limit, bloqueio por tentativas | ✅ concluída |
 | 09 | `User.email @unique` global bloqueia a mesma pessoa em duas oficinas | **pendente** |
+| 34 | Anexos de nota não eram excluídos do disco | ✅ concluída |
+| 35 | `CHECK` no `role` — decidido não fazer; garantia em `lib/roles.ts` com teste | ✅ decidido |
+| 36 | Testes de frontend | ✅ concluída |
 | 10 | `onDelete` explícito nas relações | ✅ concluída |
 | 11 | `DATABASE_URL` vindo do `.env` | ✅ concluída |
 | 12 | Validação de entrada em todas as rotas | ✅ concluída |
@@ -88,8 +91,6 @@ a partir da lista canônica. Há teste cobrindo isso.
 | 28 | Soft delete (`deleted_at`) em Client, ServiceOrder e Quote | **pendente** |
 | 29 | Autoria (`created_by_id`) em OS e Quote | **pendente** |
 | 30 | `Note.related_id` polimórfico, sem FK possível | **pendente** |
-| 34 | Anexos de nota não são excluídos do disco ao apagar a nota | **pendente** |
-| 36 | Testes do frontend (hoje só o backend tem suíte) | **pendente** |
 | 37 | Recuperação de senha por e-mail | **pendente** |
 
 ---
@@ -110,10 +111,34 @@ JWT próprio.
 ## Verificação
 
 ```
-backend:  npm test    → 53 testes, 3 arquivos
+backend:  npm test → 91 testes, 5 arquivos
+frontend: npm test → 59 testes, 5 arquivos
 backend:  npx tsc --noEmit
 frontend: npx tsc -b && npm run build
 ```
+
+---
+
+## Auditoria de segurança — 2026-08-28
+
+O `auditor-seguranca` revisou a camada de autenticação e deu veredito
+**BLOQUEADO**: 16 achados (1 crítico, 4 altos, 6 médios, 5 baixos). **Todos os 16
+foram corrigidos**, cada um com teste.
+
+| Sev. | Achado | Correção |
+|---|---|---|
+| Crítico | `/uploads` servido antes de qualquer autenticação | Modelo `Upload` com dono; leitura por `/api/files/:id` com URL assinada |
+| Alto | Sem revogação: trocar senha e sair da impersonação não expulsavam ninguém por 12h | `password_changed_at` e `company_id` conferidos a cada requisição |
+| Alto | `.svg` aceito e servido como `image/svg+xml` → XSS armazenado | Fora da allowlist; validação por magic bytes |
+| Alto | `failed_login_count` nunca zerava: bloqueio permanente por 1 requisição/15min | Contador zera quando o bloqueio expira |
+| Alto | `JWT_SECRET` placeholder passava na validação de comprimento | Recusa marcas de exemplo em produção |
+| Médio | PII (chassi, descrições) no log pelo tratador de erro | Só nome, código, rota e id de correlação |
+| Médio | `1e30` é finito, passava, e virava 500 com dump de PII | Faixa validada na borda; `P2002` do PUT vira 409 |
+| Médio | Enumeração de contas por `/register` e pelo bloqueio | Respostas igualadas |
+| Médio | Sem `trust proxy`: um balde de rate limit para a internet inteira | Configurado; kill switch sai de `NODE_ENV` |
+| Médio | `change-password` sem limitador, com 2 argon2 de 64 MiB | Limitado e contabilizado no bloqueio |
+| Médio | `req.companyId` declarado não-opcional: o tipo mentia | Opcional + `empresaDaRequisicao()` |
+| Baixo | Sem `helmet`, `algorithms` não fixado, `related_id` sem tenant, arquivo sem exclusão | Todos corrigidos |
 
 ---
 

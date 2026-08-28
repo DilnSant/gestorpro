@@ -76,9 +76,41 @@ model Company {
   serviceOrders ServiceOrder[]
   quotes        Quote[]
   notes         Note[]
+  uploads       Upload[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// Arquivo enviado. Existe para o arquivo ter dono: antes ele nascia no disco sem
+/// company_id, sem registro e sem caminho de exclusão, e o isolamento dependia só
+/// de o nome ser difícil de adivinhar — o que não é controle de acesso.
+model Upload {
+  id         String  @id @default(uuid())
+  company_id String
+  company    Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  /// Quem enviou. Opcional porque o backfill dos arquivos antigos não sabe.
+  uploaded_by String?
+
+  /// Caminho relativo a PASTA_UPLOADS.
+  /// Novos: "<company_id>/<uuid>", sem extensão — extensão em disco é o que
+  /// permitiria a um servidor estático adivinhar o tipo e servi-lo executável.
+  /// Legados (backfill): "<uuid>.<ext>" na raiz.
+  storage_key String @unique
+
+  original_name String
+  /// Tipo DETECTADO por magic bytes, nunca o declarado pelo cliente.
+  mime_type       String
+  size_bytes      Int     @default(0)
+  checksum_sha256 String?
+
+  /// Soft delete: mantém a trilha e impede reuso da chave.
+  deleted_at DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([company_id])
+  @@index([company_id, deleted_at])
 }
 
 model Client {

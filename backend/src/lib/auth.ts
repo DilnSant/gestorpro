@@ -4,6 +4,18 @@ import type { Papel } from './roles';
 
 // Sem segredo não há assinatura confiável. Falhar na partida é melhor que subir
 // um servidor que aceita tokens que qualquer um consegue forjar.
+/** Frases que denunciam um segredo de exemplo copiado sem trocar. */
+const MARCAS_DE_PLACEHOLDER = [
+  'trocar',
+  'exemplo',
+  'example',
+  'desenvolvimento',
+  'development',
+  'changeme',
+  'seu-segredo',
+  'gere-um',
+];
+
 function lerSegredo(): string {
   const valor = process.env.JWT_SECRET;
   if (!valor || valor.length < 16) {
@@ -12,6 +24,23 @@ function lerSegredo(): string {
         'antes de iniciar o servidor.',
     );
   }
+
+  // Em produção, comprimento não basta: o valor do .env.example passa nele e é
+  // adivinhável. Quem descobre o segredo forja role:'admin' e company_id de
+  // qualquer oficina — não há segunda barreira depois da verificação do token.
+  if (process.env.NODE_ENV === 'production') {
+    const minusculo = valor.toLowerCase();
+    if (MARCAS_DE_PLACEHOLDER.some((marca) => minusculo.includes(marca))) {
+      throw new Error(
+        'JWT_SECRET parece ser o valor de exemplo. Gere um segredo aleatório antes de ' +
+          'subir em produção — com ele é possível forjar acesso de administrador.',
+      );
+    }
+    if (valor.length < 32) {
+      throw new Error('JWT_SECRET precisa ter ao menos 32 caracteres em produção.');
+    }
+  }
+
   return valor;
 }
 
@@ -25,6 +54,9 @@ export type ConteudoToken = {
   /// A empresa vem daqui e de nenhum outro lugar. É o que garante o isolamento:
   /// um header ou um campo do corpo seriam escolhidos pelo próprio cliente.
   company_id: string | null;
+  /// Momento da emissão, em segundos. Usado para invalidar tokens anteriores a
+  /// uma troca de senha.
+  iat?: number;
 };
 
 export const gerarHash = (senha: string) => argon2.hash(senha, { type: argon2.argon2id });
@@ -44,12 +76,20 @@ export const assinarToken = (dados: ConteudoToken) =>
 
 export function verificarToken(token: string): ConteudoToken | null {
   try {
-    const conteudo = jwt.verify(token, SEGREDO) as jwt.JwtPayload;
+    // `algorithms` fixado: sem isso, o comportamento depende do padrão da
+    // biblioteca, que pode mudar entre versões.
+    const conteudo = jwt.verify(token, SEGREDO, { algorithms: ['HS256'] }) as jwt.JwtPayload;
+
+    // Token de arquivo carrega `aud` e nunca pode servir como token de sessão.
+    // Ele já é assinado com outro segredo; esta é a segunda barreira.
+    if (conteudo.aud !== undefined) return null;
+
     if (typeof conteudo.sub !== 'string') return null;
     return {
       sub: conteudo.sub,
       role: conteudo.role,
       company_id: typeof conteudo.company_id === 'string' ? conteudo.company_id : null,
+      iat: typeof conteudo.iat === 'number' ? conteudo.iat : undefined,
     };
   } catch {
     return null;
