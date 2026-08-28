@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../prisma';
-import { requireCompanyId } from '../middleware/authMiddleware';
+import { paraReais } from '../lib/dinheiro';
+import { exigirAdmin, exigirAutenticacao, rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -24,7 +25,7 @@ function extrairCampos(body: unknown): DadosEmpresa | { __erro: string } {
     const valor = origem[campo];
     if (valor === undefined) continue;
     if (valor === null) dados[campo] = null;
-    else if (typeof valor === 'string') dados[campo] = valor.trim();
+    else if (typeof valor === 'string') dados[campo] = valor.trim() || null;
   }
 
   // A cor vai direto para uma CSS custom property no frontend. Sem esta validação,
@@ -37,15 +38,13 @@ function extrairCampos(body: unknown): DadosEmpresa | { __erro: string } {
 }
 
 // ---------------------------------------------------------------------------
-// Painel administrativo
+// Painel administrativo — só o dono da plataforma.
 //
-// ATENÇÃO (BACKLOG 08): esta rota deveria ser exclusiva de quem tem role admin,
-// mas o papel do usuário ainda não é verificável no servidor — não há token. Ela
-// fica aberta enquanto a autenticação for simulada. É o motivo pelo qual não pode
-// ir a produção nesse estado.
+// O papel vem do token assinado. Antes esta rota era pública: qualquer um listava
+// todas as empresas cadastradas, com estatísticas.
 // ---------------------------------------------------------------------------
-router.get('/admin/all', async (_req, res) => {
-  const companies = await prisma.company.findMany({
+router.get('/admin/all', exigirAutenticacao, exigirAdmin, async (_req, res) => {
+  const empresas = await prisma.company.findMany({
     orderBy: { name: 'asc' },
     include: {
       _count: { select: { clients: true, vehicles: true, serviceOrders: true, quotes: true } },
@@ -53,7 +52,7 @@ router.get('/admin/all', async (_req, res) => {
   });
 
   res.json(
-    companies.map((empresa) => ({
+    empresas.map((empresa) => ({
       id: empresa.id,
       name: empresa.name,
       logo_url: empresa.logo_url,
@@ -72,13 +71,13 @@ router.get('/admin/all', async (_req, res) => {
   );
 });
 
-// A partir daqui tudo é escopado à empresa da requisição.
-router.use(requireCompanyId);
+// A partir daqui tudo é escopado à empresa do token.
+router.use(rotaDaEmpresa);
 
 router.get('/', async (req, res) => {
-  const company = await prisma.company.findUnique({ where: { id: req.companyId } });
-  if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
-  res.json(company);
+  const empresa = await prisma.company.findUnique({ where: { id: req.companyId } });
+  if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+  res.json(empresa);
 });
 
 router.put('/', async (req, res) => {
@@ -89,15 +88,19 @@ router.put('/', async (req, res) => {
     return res.status(400).json({ error: 'O nome da empresa não pode ficar em branco.' });
   }
 
-  // updateMany garante que a empresa alterada é a da requisição.
-  const { count } = await prisma.company.updateMany({
-    where: { id: req.companyId },
-    data: dados,
-  });
-  if (count === 0) return res.status(404).json({ error: 'Empresa não encontrada.' });
+  try {
+    // updateMany garante que a empresa alterada é a da requisição.
+    const { count } = await prisma.company.updateMany({
+      where: { id: req.companyId },
+      data: dados,
+    });
+    if (count === 0) return res.status(404).json({ error: 'Empresa não encontrada.' });
+  } catch (error) {
+    return res.status(409).json({ error: 'Já existe outra empresa com esse CNPJ ou domínio.' });
+  }
 
-  const company = await prisma.company.findUnique({ where: { id: req.companyId } });
-  res.json(company);
+  const empresa = await prisma.company.findUnique({ where: { id: req.companyId } });
+  res.json(empresa);
 });
 
 /** Números do painel inicial, calculados no banco em vez de na tela. */
@@ -108,6 +111,7 @@ router.get('/dashboard', async (req, res) => {
   inicioDoMes.setHours(0, 0, 0, 0);
 
   const ABERTAS = ['pending', 'in_progress', 'waiting_parts'];
+  const CONCLUIDAS = ['completed', 'delivered'];
 
   const [abertas, concluidasNoMes, totalClientes, porStatus, recentes, faturamento] =
     await Promise.all([
@@ -115,7 +119,7 @@ router.get('/dashboard', async (req, res) => {
       prisma.serviceOrder.count({
         where: {
           company_id: companyId,
-          status: { in: ['completed', 'delivered'] },
+          status: { in: CONCLUIDAS },
           completion_date: { gte: inicioDoMes },
         },
       }),
@@ -133,20 +137,28 @@ router.get('/dashboard', async (req, res) => {
       prisma.serviceOrder.aggregate({
         where: {
           company_id: companyId,
-          status: { in: ['completed', 'delivered'] },
+          status: { in: CONCLUIDAS },
           completion_date: { gte: inicioDoMes },
         },
-        _sum: { total_amount: true },
+        _sum: { total_amount_cents: true },
       }),
     ]);
 
   res.json({
     open_orders: abertas,
     completed_this_month: concluidasNoMes,
-    revenue_this_month: faturamento._sum.total_amount ?? 0,
+    revenue_this_month: paraReais(faturamento._sum.total_amount_cents ?? 0),
     total_clients: totalClientes,
     by_status: Object.fromEntries(porStatus.map((linha) => [linha.status, linha._count._all])),
-    recent_orders: recentes,
+    recent_orders: recentes.map((os) => ({
+      id: os.id,
+      order_number: os.order_number,
+      client_name: os.client_name_snapshot,
+      vehicle_info: `${os.vehicle_plate_snapshot} - ${os.vehicle_desc_snapshot}`,
+      status: os.status,
+      entry_date: os.entry_date,
+      total_amount: paraReais(os.total_amount_cents),
+    })),
   });
 });
 

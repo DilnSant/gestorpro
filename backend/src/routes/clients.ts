@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { prisma } from '../prisma';
-import { requireCompanyId } from '../middleware/authMiddleware';
+import { rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
 // Aplica o middleware em todas as rotas de clientes
-router.use(requireCompanyId);
+router.use(rotaDaEmpresa);
 
 // Só estes campos vêm do cliente. Antes era `...req.body` espalhado direto no
 // Prisma, o que deixava a requisição definir `id`, `createdAt` e — no PUT, que

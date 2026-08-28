@@ -19,7 +19,7 @@ type EmpresaAdmin = {
 
 const AdminPanel = () => {
   const navigate = useNavigate();
-  const { updateCompanyId } = useCompany();
+  const { acessarComoEmpresa } = useCompany();
   const [busca, setBusca] = useState('');
   const [erro, setErro] = useState('');
   const [entrando, setEntrando] = useState<string | null>(null);
@@ -35,17 +35,15 @@ const AdminPanel = () => {
     return empresas.filter((e) => e.name.toLowerCase().includes(termo));
   }, [empresas, busca]);
 
-  // Impersonação: gravar o company_id da empresa-alvo no perfil do admin faz
-  // todas as telas passarem a enxergar os dados dela.
+  // Impersonação: o servidor reemite o token com o company_id da oficina-alvo, e
+  // a partir daí todas as telas enxergam os dados dela.
   const acessarComo = async (empresa: EmpresaAdmin) => {
     setErro('');
     setEntrando(empresa.id);
     try {
-      localStorage.setItem('gestorpro_impersonando', empresa.name);
-      await updateCompanyId(empresa.id);
+      await acessarComoEmpresa(empresa.id, empresa.name);
       navigate('/dashboard');
     } catch (e) {
-      localStorage.removeItem('gestorpro_impersonando');
       setErro(e instanceof Error ? e.message : 'Não foi possível acessar a empresa.');
     } finally {
       setEntrando(null);

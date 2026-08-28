@@ -1,10 +1,12 @@
 // Ponto único de acesso à API.
 //
-// Antes, cada página repetia `fetch('http://localhost:3000/...')` com os headers
-// montados à mão, e nenhuma delas checava `response.ok` — um erro 400 do servidor
-// virava `undefined` na tela em vez de mensagem.
+// A identidade viaja no token, no header Authorization. Antes ia um
+// `x-company-id` escolhido pelo próprio navegador — bastava trocá-lo para ler os
+// dados de outra oficina.
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+
+const CHAVE_TOKEN = 'gestorpro_token';
 
 export class ApiError extends Error {
   // Campo declarado e atribuído no corpo: `erasableSyntaxOnly` do projeto não
@@ -18,19 +20,28 @@ export class ApiError extends Error {
   }
 }
 
-function empresaAtual(): string {
+export const guardarToken = (token: string) => localStorage.setItem(CHAVE_TOKEN, token);
+export const descartarToken = () => localStorage.removeItem(CHAVE_TOKEN);
+export const lerToken = () => {
   try {
-    const bruto = localStorage.getItem('gestorpro_user');
-    if (!bruto) return '';
-    return JSON.parse(bruto)?.company_id ?? '';
+    return localStorage.getItem(CHAVE_TOKEN);
   } catch {
-    return '';
+    return null;
   }
-}
+};
+
+/** Chamado quando o servidor recusa o token, para o app voltar ao login. */
+let aoExpirarSessao: (() => void) | null = null;
+export const registrarExpiracaoDeSessao = (callback: () => void) => {
+  aoExpirarSessao = callback;
+};
 
 async function requisicao<T>(caminho: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set('x-company-id', empresaAtual());
+
+  const token = lerToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+
   if (init.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
@@ -48,6 +59,12 @@ async function requisicao<T>(caminho: string, init: RequestInit = {}): Promise<T
   const dados = texto ? JSON.parse(texto) : null;
 
   if (!resposta.ok) {
+    // 401 significa token ausente, inválido ou expirado: derruba a sessão em vez
+    // de deixar a tela tentando de novo com uma credencial que já não vale.
+    if (resposta.status === 401 && !caminho.startsWith('/api/auth/login')) {
+      descartarToken();
+      aoExpirarSessao?.();
+    }
     // O backend responde { error: "mensagem em português" }. Repassar essa
     // mensagem é o que permite a tela dizer o que de fato deu errado.
     throw new ApiError(dados?.error ?? 'Não foi possível concluir a operação.', resposta.status);
@@ -59,7 +76,7 @@ async function requisicao<T>(caminho: string, init: RequestInit = {}): Promise<T
 export const api = {
   get: <T>(caminho: string) => requisicao<T>(caminho),
   post: <T>(caminho: string, corpo?: unknown) =>
-    requisicao<T>(caminho, { method: 'POST', body: corpo ? JSON.stringify(corpo) : undefined }),
+    requisicao<T>(caminho, { method: 'POST', body: corpo === undefined ? undefined : JSON.stringify(corpo) }),
   put: <T>(caminho: string, corpo: unknown) =>
     requisicao<T>(caminho, { method: 'PUT', body: JSON.stringify(corpo) }),
   delete: (caminho: string) => requisicao<void>(caminho, { method: 'DELETE' }),
@@ -74,8 +91,7 @@ export const api = {
   },
 
   /** Transforma um caminho relativo devolvido pelo upload em URL absoluta. */
-  urlArquivo: (caminho: string) =>
-    caminho.startsWith('http') ? caminho : `${BASE_URL}${caminho}`,
+  urlArquivo: (caminho: string) => (caminho.startsWith('http') ? caminho : `${BASE_URL}${caminho}`),
 };
 
 export const formatarMoeda = (valor: number | null | undefined) =>
@@ -87,7 +103,7 @@ export const formatarData = (valor: string | Date | null | undefined) => {
   return Number.isNaN(data.getTime()) ? '—' : data.toLocaleDateString('pt-BR');
 };
 
-/** O campo `items` é JSON guardado em texto; nunca confie que veio íntegro. */
+/** A API já devolve `items` como array; a checagem cobre resposta inesperada. */
 export function lerItens(bruto: unknown): Item[] {
   if (Array.isArray(bruto)) return bruto as Item[];
   if (typeof bruto !== 'string' || bruto.trim() === '') return [];

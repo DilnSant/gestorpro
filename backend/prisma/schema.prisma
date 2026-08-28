@@ -4,139 +4,301 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./dev.db"
+  url      = env("DATABASE_URL")
 }
 
+// ============================================================================
+// CONVENÇÕES DESTE SCHEMA
+//
+// DINHEIRO: todo valor monetário é Int em CENTAVOS, com o sufixo `_cents` no
+// nome. Float não representa 0,10 exatamente e o erro se acumula na soma de
+// itens — numa OS isso vira centavo divergente na conta do cliente. Decimal não
+// resolve no SQLite: a afinidade NUMERIC acaba armazenando como real do mesmo
+// jeito. O sufixo existe para que ninguém confunda a unidade; a conversão para
+// reais acontece só na borda da API.
+//
+// TENANT: todo dado de negócio tem `company_id` e um índice sobre ele. O SQLite
+// não cria índice automático para foreign key (diferente do MySQL), então sem os
+// @@index abaixo cada listagem varre a tabela inteira — inclusive as linhas de
+// outras empresas.
+//
+// EXCLUSÃO: Cascade a partir de Company (encerrar a oficina apaga tudo dela, de
+// forma atômica); Restrict entre entidades do mesmo tenant (não se apaga cliente
+// ou veículo que tem histórico financeiro).
+// ============================================================================
+
 model User {
-  id         String   @id @default(uuid())
-  email      String   @unique
-  password   String
-  name       String
-  role       String   @default("owner") // "admin" ou "owner"
+  id       String @id @default(uuid())
+  email    String @unique
+  /// Hash argon2id. NUNCA texto puro, NUNCA devolvido em resposta HTTP.
+  password String
+  name     String
+
+  /// "admin" (dono da plataforma) ou "owner" (dono da oficina).
+  /// A lista canônica vive em src/lib/roles.ts — o SQLite não suporta enum no
+  /// Prisma, e a migration adiciona um CHECK equivalente.
+  role String @default("owner")
+
+  /// Opcional de propósito: o admin da plataforma não tem oficina própria, e
+  /// durante o onboarding o usuário ainda não criou a dele.
+  /// ATENÇÃO: `where: { company_id: undefined }` no Prisma NÃO filtra — devolve
+  /// todos os tenants. Nunca repasse este campo para um where sem checar.
   company_id String?
-  company    Company? @relation(fields: [company_id], references: [id])
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  company    Company? @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  // Segurança de acesso
+  password_changed_at DateTime?
+  last_login_at       DateTime?
+  failed_login_count  Int       @default(0)
+  locked_until        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([company_id])
 }
 
 model Company {
-  id            String         @id @default(uuid())
+  id            String  @id @default(uuid())
   name          String
   logo_url      String?
-  primary_color String         @default("#2563EB")
+  primary_color String  @default("#2563EB")
   phone         String?
   email         String?
   address       String?
-  cnpj          String?
-  domain        String?
+  cnpj          String? @unique
+  /// Usado para rotear o tenant; duplicata tornaria o roteamento ambíguo.
+  domain        String? @unique
+
   users         User[]
   clients       Client[]
   vehicles      Vehicle[]
   serviceOrders ServiceOrder[]
   quotes        Quote[]
   notes         Note[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Client {
-  id         String         @id @default(uuid())
+  id         String  @id @default(uuid())
   company_id String
-  company    Company        @relation(fields: [company_id], references: [id])
-  name       String
-  cpf_cnpj   String?
-  phone      String?
-  email      String?
-  address    String?
-  notes      String?
-  vehicles   Vehicle[]
-  orders     ServiceOrder[]
-  quotes     Quote[]
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
+  company    Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  name     String
+  cpf_cnpj String?
+  phone    String?
+  email    String?
+  address  String?
+  notes    String?
+
+  vehicles Vehicle[]
+  orders   ServiceOrder[]
+  quotes   Quote[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([company_id, cpf_cnpj])
+  @@index([company_id])
+  @@index([company_id, name])
 }
 
 model Vehicle {
-  id          String         @id @default(uuid())
-  company_id  String
-  company     Company        @relation(fields: [company_id], references: [id])
-  client_id   String
-  client      Client         @relation(fields: [client_id], references: [id])
-  client_name String?
-  plate       String
-  brand       String?
-  model       String?
-  year        Int?
-  color       String?
-  km          Int?
-  chassis     String?
-  orders      ServiceOrder[]
-  quotes      Quote[]
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id         String  @id @default(uuid())
+  company_id String
+  company    Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  client_id  String
+  client     Client  @relation(fields: [client_id], references: [id], onDelete: Restrict)
+
+  /// Normalizada em maiúsculas e sem separadores antes de gravar.
+  plate   String
+  brand   String?
+  model   String?
+  year    Int?
+  color   String?
+  km      Int?
+  chassis String?
+
+  orders ServiceOrder[]
+  quotes Quote[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Única dentro da oficina, livre entre oficinas: duas oficinas atendem o mesmo
+  /// carro e cada uma precisa do seu próprio cadastro com o seu histórico.
+  @@unique([company_id, plate])
+  @@index([company_id])
+  @@index([client_id])
 }
 
 model ServiceOrder {
-  id              String    @id @default(uuid())
-  company_id      String
-  company         Company   @relation(fields: [company_id], references: [id])
-  order_number    String
-  client_id       String
-  client          Client    @relation(fields: [client_id], references: [id])
-  client_name     String?
-  vehicle_id      String
-  vehicle         Vehicle   @relation(fields: [vehicle_id], references: [id])
-  vehicle_info    String?
-  status          String    @default("pending") // pending, in_progress, waiting_parts, completed, delivered, cancelled
+  id           String  @id @default(uuid())
+  company_id   String
+  company      Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  order_number String
+
+  client_id  String
+  client     Client  @relation(fields: [client_id], references: [id], onDelete: Restrict)
+  vehicle_id String
+  vehicle    Vehicle @relation(fields: [vehicle_id], references: [id], onDelete: Restrict)
+
+  /// SNAPSHOTS do momento da emissão. A OS é um documento contratual: se o
+  /// cliente mudar de nome ou o carro for vendido, a ordem emitida em março deve
+  /// continuar mostrando os dados de março. NÃO sincronizar com o cadastro.
+  client_name_snapshot   String
+  vehicle_plate_snapshot String
+  vehicle_desc_snapshot  String
+
+  /// pending, in_progress, waiting_parts, completed, delivered, cancelled
+  status String @default("pending")
+
   entry_date      DateTime?
   estimated_date  DateTime?
   completion_date DateTime?
-  description     String?
-  items           String?   // JSON stringified array
-  labor_total     Float     @default(0)
-  parts_total     Float     @default(0)
-  discount        Float     @default(0)
-  total_amount    Float     @default(0)
-  notes           String?
-  from_quote_id   String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+
+  description String?
+  notes       String?
+
+  items ServiceOrderItem[]
+
+  // Valores em CENTAVOS. Recalculados no servidor a partir dos itens.
+  labor_total_cents  Int @default(0)
+  parts_total_cents  Int @default(0)
+  discount_cents     Int @default(0)
+  total_amount_cents Int @default(0)
+
+  /// Orçamento que originou esta ordem, quando houver.
+  from_quote    Quote?  @relation("OrcamentoParaOS", fields: [from_quote_id], references: [id], onDelete: SetNull)
+  from_quote_id String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([company_id, order_number])
+  @@index([company_id])
+  @@index([company_id, status])
+  @@index([company_id, entry_date])
+  @@index([client_id])
+  @@index([vehicle_id])
 }
 
 model Quote {
-  id                 String    @id @default(uuid())
-  company_id         String
-  company            Company   @relation(fields: [company_id], references: [id])
-  quote_number       String
-  client_id          String
-  client             Client    @relation(fields: [client_id], references: [id])
-  client_name        String?
-  vehicle_id         String
-  vehicle            Vehicle   @relation(fields: [vehicle_id], references: [id])
-  vehicle_info       String?
-  status             String    @default("draft") // draft, sent, approved, rejected, converted
-  valid_until        DateTime?
-  description        String?
-  items              String?   // JSON stringified array
-  labor_total        Float     @default(0)
-  parts_total        Float     @default(0)
-  discount           Float     @default(0)
-  total_amount       Float     @default(0)
-  notes              String?
-  converted_to_os_id String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  id           String  @id @default(uuid())
+  company_id   String
+  company      Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  quote_number String
+
+  client_id  String
+  client     Client  @relation(fields: [client_id], references: [id], onDelete: Restrict)
+  vehicle_id String
+  vehicle    Vehicle @relation(fields: [vehicle_id], references: [id], onDelete: Restrict)
+
+  client_name_snapshot   String
+  vehicle_plate_snapshot String
+  vehicle_desc_snapshot  String
+
+  /// draft, sent, approved, rejected, converted
+  status String @default("draft")
+
+  valid_until DateTime?
+  description String?
+  notes       String?
+
+  items QuoteItem[]
+
+  labor_total_cents  Int @default(0)
+  parts_total_cents  Int @default(0)
+  discount_cents     Int @default(0)
+  total_amount_cents Int @default(0)
+
+  /// Ordem gerada a partir deste orçamento. Relação recíproca de
+  /// ServiceOrder.from_quote — antes eram duas colunas soltas sem integridade,
+  /// justamente no fluxo central do produto.
+  converted_to ServiceOrder? @relation("OrcamentoParaOS")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([company_id, quote_number])
+  @@index([company_id])
+  @@index([company_id, status])
+  @@index([client_id])
+  @@index([vehicle_id])
+}
+
+// Itens deixaram de ser um JSON em coluna de texto. Como tabela, dá para somar no
+// banco, responder "quais peças mais saíram no mês" e, mais adiante, ligar a
+// estoque — nada disso é possível sobre uma string.
+model ServiceOrderItem {
+  id               String       @id @default(uuid())
+  company_id       String
+  service_order_id String
+  service_order    ServiceOrder @relation(fields: [service_order_id], references: [id], onDelete: Cascade)
+
+  /// "service" (mão de obra) ou "part" (peça).
+  type String
+
+  /// Congelado na emissão, como o preço: o documento não muda se o catálogo mudar.
+  description String
+  quantity    Float @default(1)
+
+  unit_price_cents Int
+  total_cents      Int
+
+  position Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([service_order_id])
+  @@index([company_id, type])
+}
+
+model QuoteItem {
+  id         String @id @default(uuid())
+  company_id String
+  quote_id   String
+  quote      Quote  @relation(fields: [quote_id], references: [id], onDelete: Cascade)
+
+  type        String
+  description String
+  quantity    Float  @default(1)
+
+  unit_price_cents Int
+  total_cents      Int
+
+  position Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([quote_id])
+  @@index([company_id, type])
 }
 
 model Note {
-  id         String   @id @default(uuid())
+  id         String  @id @default(uuid())
   company_id String
-  company    Company  @relation(fields: [company_id], references: [id])
-  title      String
-  content    String?
-  type       String   @default("general") // general, service_order, client, vehicle
+  company    Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  title   String
+  content String?
+
+  /// general, service_order, client, vehicle
+  type String @default("general")
+
+  /// Referência polimórfica: aponta para OS, cliente ou veículo conforme `type`.
+  /// Não aceita foreign key, então pode ficar órfã se o alvo for excluído.
   related_id String?
-  file_urls  String?  // JSON stringified array
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+
+  /// JSON em texto: o conector SQLite do Prisma não suporta o tipo Json.
+  file_urls String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([company_id])
+  @@index([company_id, type])
+  @@index([related_id])
 }

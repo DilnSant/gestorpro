@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../prisma';
-import { requireCompanyId } from '../middleware/authMiddleware';
+import { rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
-router.use(requireCompanyId);
+router.use(rotaDaEmpresa);
 
 const TIPOS = ['general', 'service_order', 'client', 'vehicle'] as const;
 
