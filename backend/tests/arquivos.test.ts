@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import {
   PNG_VALIDO,
@@ -177,8 +175,8 @@ describe('cabeçalhos de contenção', () => {
   });
 });
 
-describe('caminho no disco', () => {
-  it('grava dentro da pasta da própria oficina, sem extensão', async () => {
+describe('armazenamento', () => {
+  it('prefixa a chave com a empresa, o que mantém a exclusão em massa trivial', async () => {
     const { prisma } = await import('../src/prisma');
     const enviado = await enviarPng(alfa.token);
 
@@ -186,11 +184,21 @@ describe('caminho no disco', () => {
       where: { id: enviado.body.files[0].id },
     });
 
-    expect(registro?.storage_key.startsWith(`${alfa.companyId}${path.sep}`)).toBe(true);
-    expect(path.extname(registro!.storage_key)).toBe('');
+    expect(registro?.storage_key.startsWith(`${alfa.companyId}/`)).toBe(true);
   });
 
-  it('ignora nome de arquivo com travessia de diretório', async () => {
+  it('guarda os bytes íntegros no banco, não em disco', async () => {
+    const { prisma } = await import('../src/prisma');
+    const enviado = await enviarPng(alfa.token);
+
+    const registro = await prisma.upload.findUnique({
+      where: { id: enviado.body.files[0].id },
+    });
+
+    expect(Buffer.from(registro!.data).equals(PNG_VALIDO)).toBe(true);
+  });
+
+  it('não deixa nome com travessia de diretório virar caminho', async () => {
     const enviado = await enviarArquivo(
       alfa.token,
       '../../../../tmp/invadido.png',
@@ -198,23 +206,29 @@ describe('caminho no disco', () => {
       'image/png',
     );
 
+    // O nome original é só metadado; a chave é gerada pelo servidor.
     expect(enviado.status).toBe(201);
-    expect(fs.existsSync('/tmp/invadido.png')).toBe(false);
+    expect(String(enviado.body.files[0].url)).not.toContain('..');
   });
 });
 
 describe('exclusão', () => {
-  it('apaga do banco e do disco', async () => {
+  it('apaga o registro e descarta os bytes', async () => {
     const { prisma } = await import('../src/prisma');
     const enviado = await enviarPng(alfa.token);
     const id = enviado.body.files[0].id;
 
-    const registro = await prisma.upload.findUnique({ where: { id } });
-    const caminho = path.resolve(__dirname, '../uploads', registro!.storage_key);
-    expect(fs.existsSync(caminho)).toBe(true);
+    const antes = await prisma.upload.findUnique({ where: { id } });
+    expect(antes!.data.length).toBeGreaterThan(0);
 
     expect((await req('DELETE', `/api/files/${id}`, undefined, alfa.token)).status).toBe(204);
-    expect(fs.existsSync(caminho)).toBe(false);
+
+    // Soft delete mantém a trilha, mas o conteúdo vai embora: é o que atende a
+    // um pedido de exclusão do titular sem deixar resíduo no banco.
+    const depois = await prisma.upload.findUnique({ where: { id } });
+    expect(depois!.deleted_at).not.toBeNull();
+    expect(depois!.data.length).toBe(0);
+
     expect((await baixar(`/api/files/${id}`, alfa.token)).status).toBe(404);
   });
 

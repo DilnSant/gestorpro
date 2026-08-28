@@ -1,6 +1,5 @@
-import fs from 'node:fs';
 import { prisma } from '../prisma';
-import { assinarUrlArquivo, caminhoDoArquivo, resolverReferencia } from './arquivos';
+import { assinarUrlArquivo, resolverReferencia } from './arquivos';
 
 // Serialização e ciclo de vida dos arquivos referenciados por outras entidades.
 //
@@ -94,20 +93,12 @@ export async function excluirArquivos(referencias: unknown, companyId: string): 
   const arquivos = await carregarArquivos(referencias, companyId);
   if (arquivos.length === 0) return;
 
-  const registros = await prisma.upload.findMany({
-    where: { id: { in: arquivos.map((a) => a.id) }, company_id: companyId },
-    select: { id: true, storage_key: true },
-  });
-
+  // Soft delete mantém a trilha; os bytes vão embora na mesma operação, o que
+  // atende ao pedido de exclusão do titular (LGPD art. 18) sem deixar resíduo.
   await prisma.upload.updateMany({
-    where: { id: { in: registros.map((r) => r.id) }, company_id: companyId },
-    data: { deleted_at: new Date() },
+    where: { id: { in: arquivos.map((a) => a.id) }, company_id: companyId },
+    data: { deleted_at: new Date(), data: Buffer.alloc(0) },
   });
-
-  for (const registro of registros) {
-    const caminho = caminhoDoArquivo(registro.storage_key);
-    if (caminho) fs.rmSync(caminho, { force: true });
-  }
 }
 
 /** As referências que estavam antes e não estão depois. */

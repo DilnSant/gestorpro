@@ -4,7 +4,12 @@
 // `x-company-id` escolhido pelo próprio navegador — bastava trocá-lo para ler os
 // dados de outra oficina.
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+// Em produção, frontend e API compartilham a origem: o `vercel.json` reescreve
+// `/api/*` para a função. Base vazia significa caminho relativo — e sem origem
+// cruzada não há CORS nem preflight.
+// Em desenvolvimento, o backend roda em outra porta.
+const BASE_URL =
+  import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:3000' : '');
 
 const CHAVE_TOKEN = 'gestorpro_token';
 

@@ -3,8 +3,10 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Conexão direta, sem pooler: o Prisma precisa dela para aplicar migrações.
+  directUrl = env("DIRECT_URL")
 }
 
 // ============================================================================
@@ -12,10 +14,10 @@ datasource db {
 //
 // DINHEIRO: todo valor monetário é Int em CENTAVOS, com o sufixo `_cents` no
 // nome. Float não representa 0,10 exatamente e o erro se acumula na soma de
-// itens — numa OS isso vira centavo divergente na conta do cliente. Decimal não
-// resolve no SQLite: a afinidade NUMERIC acaba armazenando como real do mesmo
-// jeito. O sufixo existe para que ninguém confunda a unidade; a conversão para
-// reais acontece só na borda da API.
+// itens — numa OS isso vira centavo divergente na conta do cliente. O sufixo
+// existe para que ninguém confunda a unidade; a conversão para reais acontece só
+// na borda da API. Em Postgres, `Decimal` passaria a ser viável — mas centavos
+// inteiros já estão implementados e testados, e a troca não traria ganho.
 //
 // TENANT: todo dado de negócio tem `company_id` e um índice sobre ele. O SQLite
 // não cria índice automático para foreign key (diferente do MySQL), então sem os
@@ -93,11 +95,18 @@ model Upload {
   /// Quem enviou. Opcional porque o backfill dos arquivos antigos não sabe.
   uploaded_by String?
 
-  /// Caminho relativo a PASTA_UPLOADS.
-  /// Novos: "<company_id>/<uuid>", sem extensão — extensão em disco é o que
-  /// permitiria a um servidor estático adivinhar o tipo e servi-lo executável.
-  /// Legados (backfill): "<uuid>.<ext>" na raiz.
+  /// Identificador lógico do arquivo. Não é mais caminho em disco: em serverless
+  /// o sistema de arquivos é efêmero, e o que for gravado some entre invocações.
   storage_key String @unique
+
+  /// Os bytes do arquivo.
+  ///
+  /// Guardar no banco em vez de num serviço de blob é um trade-off consciente:
+  /// evita uma segunda dependência e funciona em serverless, ao custo de inchar
+  /// o banco e não ter CDN. Sustentável no limite de 10 MB por arquivo que a
+  /// rota de upload já impõe. Migrar para Vercel Blob é a evolução natural
+  /// quando o volume justificar.
+  data Bytes
 
   original_name String
   /// Tipo DETECTADO por magic bytes, nunca o declarado pelo cliente.

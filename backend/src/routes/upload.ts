@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import fs from 'node:fs';
 import { Router } from 'express';
 import multer from 'multer';
 import rateLimit from 'express-rate-limit';
@@ -12,7 +11,6 @@ import {
   usuarioDaRequisicao,
 } from '../middleware/authMiddleware';
 import {
-  PASTA_UPLOADS,
   assinarUrlArquivo,
   detectarMime,
   extensaoCombina,
@@ -20,8 +18,6 @@ import {
 } from '../lib/arquivos';
 
 const router = Router();
-
-fs.mkdirSync(PASTA_UPLOADS, { recursive: true });
 
 // Extensões aceitas na porta de entrada. `.svg` ficou de fora de propósito: é XML
 // executável, e servido como image/svg+xml na origem da API vira XSS armazenado.
@@ -95,23 +91,20 @@ router.post('/', (req, res) => {
       validados.push({ arquivo, mime });
     }
 
-    // Subdiretório por empresa: encerrar uma oficina passa a ser um rm -rf de uma
-    // pasta, e não uma varredura do volume inteiro atrás dos arquivos dela.
-    const pastaDaEmpresa = path.join(PASTA_UPLOADS, companyId);
-    fs.mkdirSync(pastaDaEmpresa, { recursive: true });
-
     const criados = [];
     for (const { arquivo, mime } of validados) {
-      // Sem extensão em disco: é a extensão que permitiria a um servidor estático
-      // adivinhar o tipo e servir o arquivo executável.
-      const storageKey = path.join(companyId, randomUUID());
-      fs.writeFileSync(path.join(PASTA_UPLOADS, storageKey), arquivo.buffer);
+      // Os bytes vão para o banco. Em serverless o disco é efêmero: o que for
+      // gravado em arquivo some entre invocações, e o próximo request não acha.
+      // A chave continua prefixada pela empresa, o que mantém a exclusão em
+      // massa de um tenant trivial.
+      const storageKey = `${companyId}/${randomUUID()}`;
 
       const registro = await prisma.upload.create({
         data: {
           company_id: companyId,
           uploaded_by: usuario.id,
           storage_key: storageKey,
+          data: arquivo.buffer,
           original_name: arquivo.originalname.slice(0, 255),
           mime_type: mime,
           size_bytes: arquivo.size,
@@ -135,5 +128,4 @@ router.post('/', (req, res) => {
   });
 });
 
-export { PASTA_UPLOADS };
 export default router;

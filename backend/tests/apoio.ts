@@ -1,11 +1,28 @@
 import { execSync } from 'node:child_process';
 import path from 'node:path';
-import fs from 'node:fs';
+import 'dotenv/config';
 
-// Banco próprio dos testes. Rodar contra o dev.db corromperia os dados de
-// trabalho e faria cada execução depender do que sobrou da anterior.
-const ARQUIVO = path.resolve(__dirname, 'teste.db');
-process.env.DATABASE_URL = `file:${ARQUIVO}`;
+// Schema próprio dos testes, dentro do mesmo Postgres.
+//
+// Rodar contra o schema de trabalho apagaria dados reais e faria cada execução
+// depender do que sobrou da anterior. O `?schema=` do Prisma isola de verdade:
+// as tabelas são criadas e destruídas dentro de `teste`, sem tocar em `public`.
+const URL_BANCO = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+if (!URL_BANCO) {
+  throw new Error(
+    'Defina DATABASE_URL (ou TEST_DATABASE_URL) no backend/.env para rodar os testes.',
+  );
+}
+
+const comSchema = (url: string, schema: string) => {
+  const u = new URL(url);
+  u.searchParams.set('schema', schema);
+  return u.toString();
+};
+
+const SCHEMA_TESTE = 'teste';
+process.env.DATABASE_URL = comSchema(URL_BANCO, SCHEMA_TESTE);
+process.env.DIRECT_URL = comSchema(process.env.TEST_DIRECT_URL ?? URL_BANCO, SCHEMA_TESTE);
 process.env.JWT_SECRET = 'segredo-de-teste-suficientemente-longo';
 process.env.NODE_ENV = 'test';
 // Limite por IP desligado: a suíte cria dezenas de contas do mesmo endereço. O
@@ -17,12 +34,17 @@ export const BASE = 'http://127.0.0.1:3998';
 let servidor: { close: () => void } | null = null;
 
 export async function prepararBanco() {
-  for (const sufixo of ['', '-journal']) {
-    fs.rmSync(ARQUIVO + sufixo, { force: true });
-  }
+  // Derruba e recria o schema de teste: cada execução começa do zero, sem herdar
+  // nada da anterior.
+  execSync(
+    `npx prisma db execute --url "${process.env.DIRECT_URL}" ` +
+      `--stdin <<< 'DROP SCHEMA IF EXISTS ${SCHEMA_TESTE} CASCADE; CREATE SCHEMA ${SCHEMA_TESTE};'`,
+    { cwd: path.resolve(__dirname, '..'), stdio: 'pipe', shell: '/bin/bash' },
+  );
+
   execSync('npx prisma migrate deploy', {
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, DATABASE_URL: `file:${ARQUIVO}` },
+    env: process.env,
     stdio: 'pipe',
   });
 }
