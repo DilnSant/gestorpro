@@ -2,8 +2,6 @@ import { createHmac } from 'node:crypto';
 import path from 'node:path';
 import jwt from 'jsonwebtoken';
 
-export const PASTA_UPLOADS = path.resolve(__dirname, '../../uploads');
-
 // ---------------------------------------------------------------------------
 // Segredo próprio para URLs de arquivo.
 //
@@ -88,17 +86,6 @@ export function resolverReferencia(valor: unknown): Referencia {
   return null;
 }
 
-/**
- * Caminho absoluto do arquivo, com checagem de contenção.
- *
- * A chave é gerada pelo servidor, mas os legados vieram de dado persistido — e a
- * checagem custa nada. Devolve null se o caminho escapar da pasta de uploads.
- */
-export function caminhoDoArquivo(storageKey: string): string | null {
-  const destino = path.resolve(PASTA_UPLOADS, storageKey);
-  const raiz = PASTA_UPLOADS + path.sep;
-  return destino === PASTA_UPLOADS || destino.startsWith(raiz) ? destino : null;
-}
 
 // ---------------------------------------------------------------------------
 // Tipos de arquivo

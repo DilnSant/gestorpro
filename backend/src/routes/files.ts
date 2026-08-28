@@ -1,10 +1,8 @@
-import fs from 'node:fs';
 import { Router } from 'express';
 import { prisma } from '../prisma';
 import { empresaDaRequisicao, exigirAutenticacao, exigirEmpresa } from '../middleware/authMiddleware';
 import { verificarToken } from '../lib/auth';
 import {
-  caminhoDoArquivo,
   podeExibirInline,
   MIMES_PERMITIDOS,
   verificarTokenArquivo,
@@ -68,11 +66,6 @@ router.get('/:id', async (req, res) => {
   });
   if (!arquivo) return res.status(404).json({ error: 'Arquivo não encontrado.' });
 
-  const caminho = caminhoDoArquivo(arquivo.storage_key);
-  if (!caminho || !fs.existsSync(caminho)) {
-    return res.status(404).json({ error: 'Arquivo não encontrado.' });
-  }
-
   const mime = MIMES_PERMITIDOS.has(arquivo.mime_type)
     ? arquivo.mime_type
     : 'application/octet-stream';
@@ -93,7 +86,8 @@ router.get('/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'private, max-age=300');
   if (arquivo.checksum_sha256) res.setHeader('ETag', `"${arquivo.checksum_sha256}"`);
 
-  fs.createReadStream(caminho).pipe(res);
+  res.setHeader('Content-Length', String(arquivo.data.length));
+  res.end(arquivo.data);
 });
 
 /** Exclusão pelo dono. Soft delete no banco, remoção física do disco. */
@@ -107,13 +101,11 @@ router.delete('/:id', exigirAutenticacao, exigirEmpresa, async (req, res) => {
   });
   if (!arquivo) return res.status(404).json({ error: 'Arquivo não encontrado.' });
 
+  // Os bytes vão embora junto com o soft delete: a trilha fica, o conteúdo não.
   await prisma.upload.update({
     where: { id: arquivo.id },
-    data: { deleted_at: new Date() },
+    data: { deleted_at: new Date(), data: Buffer.alloc(0) },
   });
-
-  const caminho = caminhoDoArquivo(arquivo.storage_key);
-  if (caminho) fs.rmSync(caminho, { force: true });
 
   res.status(204).send();
 });

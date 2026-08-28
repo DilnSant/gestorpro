@@ -1,0 +1,20 @@
+{
+  "name": "gestorpro",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sistema de gestão para oficinas mecânicas",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "vercel-install": "npm install",
+    "vercel-build": "npm run -w backend prisma:generate && npm run -w backend prisma:deploy && npm run -w frontend build",
+    "dev:backend": "npm run -w backend dev",
+    "dev:frontend": "npm run -w frontend dev",
+    "test": "npm run -w backend test && npm run -w frontend test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
