@@ -44,6 +44,51 @@ const Notes = () => {
   const [anexos, setAnexos] = useState<string[]>([]);
   const [enviandoArquivo, setEnviandoArquivo] = useState(false);
   const [erro, setErro] = useState('');
+  const [tipoSelecionado, setTipoSelecionado] = useState('general');
+  const [vinculo, setVinculo] = useState('');
+
+  // As listas para o seletor de vínculo só são buscadas quando o tipo escolhido
+  // realmente precisa delas.
+  const precisaDe = (t: string) => aberto && tipoSelecionado === t;
+
+  const { data: clientes = [], isLoading: carregandoClientes } = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.get<{ id: string; name: string }[]>('/api/clients'),
+    enabled: precisaDe('client'),
+  });
+
+  const { data: veiculos = [], isLoading: carregandoVeiculos } = useQuery({
+    queryKey: ['vehicles'],
+    queryFn: () => api.get<{ id: string; plate: string; brand: string | null; model: string | null }[]>('/api/vehicles'),
+    enabled: precisaDe('vehicle'),
+  });
+
+  const { data: ordens = [], isLoading: carregandoOrdens } = useQuery({
+    queryKey: ['service-orders'],
+    queryFn: () => api.get<{ id: string; order_number: string; client_name: string | null }[]>('/api/service-orders'),
+    enabled: precisaDe('service_order'),
+  });
+
+  const carregandoVinculos = carregandoClientes || carregandoVeiculos || carregandoOrdens;
+
+  const opcoesVinculo = useMemo(() => {
+    if (tipoSelecionado === 'client') {
+      return clientes.map((c) => ({ id: c.id, rotulo: c.name }));
+    }
+    if (tipoSelecionado === 'vehicle') {
+      return veiculos.map((v) => ({
+        id: v.id,
+        rotulo: [v.plate, [v.brand, v.model].filter(Boolean).join(' ')].filter(Boolean).join(' — '),
+      }));
+    }
+    if (tipoSelecionado === 'service_order') {
+      return ordens.map((os) => ({
+        id: os.id,
+        rotulo: `${os.order_number}${os.client_name ? ` — ${os.client_name}` : ''}`,
+      }));
+    }
+    return [];
+  }, [tipoSelecionado, clientes, veiculos, ordens]);
 
   const { data: notas = [], isLoading } = useQuery({
     queryKey: ['notes'],
@@ -78,6 +123,8 @@ const Notes = () => {
   const abrir = (nota: Nota | null) => {
     setEditando(nota);
     setAnexos(lerAnexos(nota?.file_urls ?? null));
+    setTipoSelecionado(nota?.type ?? 'general');
+    setVinculo(nota?.related_id ?? '');
     setErro('');
     setAberto(true);
   };
@@ -86,6 +133,8 @@ const Notes = () => {
     setAberto(false);
     setEditando(null);
     setAnexos([]);
+    setTipoSelecionado('general');
+    setVinculo('');
     setErro('');
   };
 
@@ -109,8 +158,10 @@ const Notes = () => {
     salvar.mutate({
       title: form.get('title'),
       content: form.get('content'),
-      type: form.get('type'),
-      related_id: form.get('related_id') || null,
+      type: tipoSelecionado,
+      // Nota geral não carrega vínculo, mesmo que um tenha sido escolhido antes
+      // de a pessoa trocar o tipo.
+      related_id: tipoSelecionado === 'general' ? null : vinculo || null,
       file_urls: anexos,
     });
   };
@@ -237,21 +288,48 @@ const Notes = () => {
 
                 <div className="field">
                   <label htmlFor="type">Tipo</label>
-                  <select id="type" name="type" defaultValue={editando?.type ?? 'general'}>
+                  <select
+                    id="type"
+                    name="type"
+                    value={tipoSelecionado}
+                    onChange={(e) => {
+                      setTipoSelecionado(e.target.value);
+                      // Trocar o tipo invalida o vínculo: uma OS não é um cliente.
+                      setVinculo('');
+                    }}
+                  >
                     {TIPOS.map((t) => (
                       <option key={t.value} value={t.value}>{t.label}</option>
                     ))}
                   </select>
                 </div>
 
+                {/* Antes isto era um campo de texto pedindo o ID — obrigava a
+                    pessoa a achar e colar um UUID de 36 caracteres. */}
                 <div className="field">
-                  <label htmlFor="related_id">Vinculada a (opcional)</label>
-                  <input
+                  <label htmlFor="related_id">
+                    {tipoSelecionado === 'general' ? 'Vínculo' : `${rotuloTipo(tipoSelecionado)} vinculado`}
+                  </label>
+                  <select
                     id="related_id"
                     name="related_id"
-                    defaultValue={editando?.related_id ?? ''}
-                    placeholder="ID da OS, cliente ou veículo"
-                  />
+                    value={vinculo}
+                    onChange={(e) => setVinculo(e.target.value)}
+                    disabled={tipoSelecionado === 'general' || carregandoVinculos}
+                  >
+                    <option value="">
+                      {tipoSelecionado === 'general'
+                        ? 'Nota geral, sem vínculo'
+                        : carregandoVinculos
+                          ? 'Carregando…'
+                          : opcoesVinculo.length === 0
+                            ? 'Nada cadastrado ainda'
+                            : 'Nenhum (opcional)'}
+                    </option>
+                    {opcoesVinculo.map((opcao) => (
+                      <option key={opcao.id} value={opcao.id}>{opcao.rotulo}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="field full">
