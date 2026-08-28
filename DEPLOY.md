@@ -22,7 +22,7 @@ Em Settings → Environment Variables, para **Production** e **Preview**:
 | Variável | Onde encontrar o valor |
 |---|---|
 | `DATABASE_URL` | Supabase → Settings → Database → Connection string. **Use o pooler** (porta 6543) e acrescente `?pgbouncer=true&connection_limit=1` |
-| `DIRECT_URL` | A mesma, mas conexão direta (porta 5432). O Prisma usa só para migrar |
+| `DIRECT_URL` | A mesma, mas conexão direta (porta 5432). O Prisma valida o schema com ela, mesmo sem migrar no build |
 | `JWT_SECRET` | Copie de `backend/.env` — ou gere outro com `openssl rand -base64 48` |
 | `CORS_ORIGINS` | A URL do projeto, ex.: `https://gestorpro.vercel.app` |
 | `NODE_ENV` | `production` |
@@ -37,7 +37,19 @@ ler os dados de qualquer oficina — não existe segunda barreira depois da
 verificação do token. Use um valor diferente do de desenvolvimento, e nunca o
 coloque no repositório.
 
-## 3. Verificar depois do primeiro deploy
+## 3. Migrações do banco
+
+**O build não roda migração.** Fazer isso a cada deploy tornaria a publicação
+dependente de credencial e conectividade de banco — foi o que quebrou os dois
+primeiros deploys aqui.
+
+O schema já está aplicado no Supabase. Quando houver migração nova:
+
+```bash
+npm run db:deploy      # local, com DIRECT_URL no backend/.env
+```
+
+## 4. Verificar depois do primeiro deploy
 
 ```
 curl https://SEU-PROJETO.vercel.app/health
