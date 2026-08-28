@@ -1,5 +1,10 @@
 generator client {
   provider = "prisma-client-js"
+  // O engine de consulta é um binário específico da plataforma. Sem declarar o
+  // alvo da Vercel (Amazon Linux), o build gera só o da máquina local (Debian)
+  // e toda consulta falha em produção — com o servidor no ar, porque a quebra
+  // só acontece na primeira query, não no carregamento.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

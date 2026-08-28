@@ -54,6 +54,28 @@ export function criarApp() {
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
+  // Diagnóstico de conectividade com o banco.
+  //
+  // O /health acima não toca no Prisma, então responde OK mesmo com o banco
+  // inacessível — foi exatamente o que mascarou a falha no primeiro deploy.
+  // Este devolve o código de erro do Prisma (P1001 = sem conexão, P1000 =
+  // credencial recusada), que não é dado sensível e permite diagnosticar sem
+  // acesso ao log da plataforma.
+  app.get('/health/db', async (_req, res) => {
+    const { prisma } = await import('./prisma');
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      res.json({ ok: true, db: 'conectado' });
+    } catch (erro) {
+      const codigo =
+        (erro as { errorCode?: string })?.errorCode ??
+        (erro as { code?: string })?.code ??
+        'desconhecido';
+      const nome = erro instanceof Error ? erro.name : 'ErroDesconhecido';
+      res.status(503).json({ ok: false, db: 'indisponível', codigo, nome });
+    }
+  });
+
   app.use('/api/auth', authRoutes);
   app.use('/api/clients', clientRoutes);
   app.use('/api/vehicles', vehicleRoutes);
