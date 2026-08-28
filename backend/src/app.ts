@@ -8,7 +8,7 @@ import serviceOrderRoutes from './routes/serviceOrders';
 import quoteRoutes from './routes/quotes';
 import noteRoutes from './routes/notes';
 import companyRoutes from './routes/company';
-import uploadRoutes, { PASTA_UPLOADS } from './routes/upload';
+import uploadRoutes from './routes/upload';
 import fileRoutes from './routes/files';
 
 /**
@@ -31,7 +31,10 @@ export function criarApp() {
   app.use(cors({ origin: ORIGENS, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
 
-  app.use('/uploads', express.static(PASTA_UPLOADS));
+  // NÃO reintroduzir um mount estático aqui. Arquivo é dado de uma oficina e sai
+  // por /api/files, que confere propriedade. `express.static` roda antes de
+  // qualquer autenticação e serviria o arquivo de qualquer tenant a quem tivesse
+  // a URL — foi o achado crítico da auditoria.
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
 

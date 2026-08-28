@@ -59,6 +59,52 @@ export async function req<T = any>(
   return { status: resposta.status, body: texto ? JSON.parse(texto) : null };
 }
 
+/**
+ * Envia arquivo. O `req()` acima força JSON, então não serve para multipart.
+ */
+export async function enviarArquivo(
+  token: string,
+  nome: string,
+  conteudo: Buffer | string,
+  mime = 'application/octet-stream',
+) {
+  const form = new FormData();
+  const bytes = typeof conteudo === 'string' ? Buffer.from(conteudo) : conteudo;
+  form.append('files', new Blob([new Uint8Array(bytes)], { type: mime }), nome);
+
+  const resposta = await fetch(`${BASE}/api/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+
+  const texto = await resposta.text();
+  return { status: resposta.status, body: texto ? JSON.parse(texto) : null };
+}
+
+/** Baixa arquivo. Devolve headers e bytes, que o `req()` também não faz. */
+export async function baixar(caminho: string, token?: string) {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const resposta = await fetch(BASE + caminho, { headers });
+  const buffer = Buffer.from(await resposta.arrayBuffer());
+
+  return {
+    status: resposta.status,
+    headers: resposta.headers,
+    buffer,
+    texto: buffer.toString('utf8'),
+  };
+}
+
+/** PNG mínimo válido (assinatura + IHDR), para exercitar a detecção por conteúdo. */
+export const PNG_VALIDO = Buffer.from(
+  '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000100' +
+    '05fe02fa0000000049454e44ae426082',
+  'hex',
+);
+
 /** Conta nova já com oficina criada. Devolve o token e os ids úteis. */
 export async function criarOficina(nome: string, email: string) {
   const cadastro = await req('POST', '/api/auth/register', {

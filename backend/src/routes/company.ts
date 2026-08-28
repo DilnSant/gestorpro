@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../prisma';
 import { paraReais } from '../lib/dinheiro';
 import { empresaDaRequisicao, exigirAdmin, exigirAutenticacao, rotaDaEmpresa } from '../middleware/authMiddleware';
+import { carregarArquivo, excluirArquivos, normalizarReferencias } from '../lib/anexos';
 
 const router = Router();
 
@@ -74,13 +75,23 @@ router.get('/admin/all', exigirAutenticacao, exigirAdmin, async (_req, res) => {
 // A partir daqui tudo é escopado à empresa do token.
 router.use(rotaDaEmpresa);
 
+// `logo_url` é a referência persistida; `logo_view_url` é a assinada, que o
+// `<img src>` consegue usar sem header. Gravar a segunda no banco daria link
+// morto em uma hora — é o erro mais fácil de cometer aqui.
+async function serializarEmpresa(empresa: { logo_url: string | null }, companyId: string) {
+  const logo = await carregarArquivo(empresa.logo_url, companyId);
+  return { ...empresa, logo_view_url: logo?.view_url ?? null };
+}
+
 router.get('/', async (req, res) => {
-  const empresa = await prisma.company.findUnique({ where: { id: empresaDaRequisicao(req) } });
+  const companyId = empresaDaRequisicao(req);
+  const empresa = await prisma.company.findUnique({ where: { id: companyId } });
   if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
-  res.json(empresa);
+  res.json(await serializarEmpresa(empresa, companyId));
 });
 
 router.put('/', async (req, res) => {
+  const companyId = empresaDaRequisicao(req);
   const dados = extrairCampos(req.body);
   if ('__erro' in dados) return res.status(400).json({ error: dados.__erro });
 
@@ -88,19 +99,33 @@ router.put('/', async (req, res) => {
     return res.status(400).json({ error: 'O nome da empresa não pode ficar em branco.' });
   }
 
+  const atual = await prisma.company.findUnique({ where: { id: companyId } });
+  if (!atual) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+  // A logo precisa ser um arquivo desta empresa: sem a checagem, daria para
+  // apontar para o arquivo de outra oficina.
+  if (dados.logo_url !== undefined && dados.logo_url !== null) {
+    const referencia = await normalizarReferencias([dados.logo_url], companyId);
+    if ('erro' in referencia) {
+      return res.status(400).json({ error: 'A imagem informada não pertence a esta oficina.' });
+    }
+    dados.logo_url = referencia.referencias[0] ?? null;
+  }
+
   try {
-    // updateMany garante que a empresa alterada é a da requisição.
-    const { count } = await prisma.company.updateMany({
-      where: { id: empresaDaRequisicao(req) },
-      data: dados,
-    });
+    const { count } = await prisma.company.updateMany({ where: { id: companyId }, data: dados });
     if (count === 0) return res.status(404).json({ error: 'Empresa não encontrada.' });
   } catch (error) {
     return res.status(409).json({ error: 'Já existe outra empresa com esse CNPJ ou domínio.' });
   }
 
-  const empresa = await prisma.company.findUnique({ where: { id: empresaDaRequisicao(req) } });
-  res.json(empresa);
+  // Trocar ou limpar a logo apaga a anterior do disco.
+  if (dados.logo_url !== undefined && atual.logo_url && atual.logo_url !== dados.logo_url) {
+    await excluirArquivos([atual.logo_url], companyId);
+  }
+
+  const empresa = await prisma.company.findUnique({ where: { id: companyId } });
+  res.json(empresa ? await serializarEmpresa(empresa, companyId) : null);
 });
 
 /** Números do painel inicial, calculados no banco em vez de na tela. */
