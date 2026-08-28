@@ -21,7 +21,7 @@ Em Settings → Environment Variables, para **Production** e **Preview**:
 
 | Variável | Onde encontrar o valor |
 |---|---|
-| `DATABASE_URL` | Supabase → Settings → Database → Connection string. **Use o pooler** (porta 6543) e acrescente `?pgbouncer=true&connection_limit=1` |
+| `DATABASE_URL` | Pooler do Supabase, porta 6543. **O usuário é `postgres.<ref-do-projeto>`, não `postgres`** — ver abaixo. Acrescente `?pgbouncer=true&connection_limit=1` |
 | `DIRECT_URL` | A mesma, mas conexão direta (porta 5432). O Prisma valida o schema com ela, mesmo sem migrar no build |
 | `JWT_SECRET` | Copie de `backend/.env` — ou gere outro com `openssl rand -base64 48` |
 | `CORS_ORIGINS` | A URL do projeto, ex.: `https://gestorpro.vercel.app` |
@@ -31,6 +31,22 @@ Em Settings → Environment Variables, para **Production** e **Preview**:
 pooler, um pico de acessos esgota o limite de conexões do Postgres e a aplicação
 passa a recusar requisições. O `connection_limit=1` é o que faz cada função usar
 uma conexão só.
+
+**O usuário do pooler é diferente.** Esta é a pegadinha que custou um ciclo de
+deploy aqui:
+
+```
+direto  postgresql://postgres:SENHA@db.<ref>.supabase.co:5432/postgres
+pooler  postgresql://postgres.<ref>:SENHA@aws-1-<região>.pooler.supabase.com:6543/postgres
+                              ^^^^^^
+```
+
+O pooler usa o identificador do projeto no nome de usuário para saber a qual
+banco encaminhar. Com `postgres` puro ele responde
+`FATAL: no tenant identifier provided`, que o Prisma reporta como
+"credenciais inválidas" — mensagem que manda procurar no lugar errado.
+
+Se acontecer, `GET /health/db` diz exatamente isso.
 
 **Sobre o `JWT_SECRET`.** Com ele é possível forjar um token de administrador e
 ler os dados de qualquer oficina — não existe segunda barreira depois da
