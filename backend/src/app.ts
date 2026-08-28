@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 
 import authRoutes from './routes/auth';
 import clientRoutes from './routes/clients';
@@ -19,6 +21,20 @@ import fileRoutes from './routes/files';
  */
 export function criarApp() {
   const app = express();
+
+  // Número exato de proxies, nunca `true`. Sem isto, atrás de nginx ou Cloudflare
+  // todos os clientes compartilham o IP do proxy — e o rate limit vira um balde
+  // único de 20 logins por 15 min para a internet inteira.
+  app.set('trust proxy', Number(process.env.TRUSTED_PROXIES ?? 0));
+
+  app.disable('x-powered-by');
+  app.use(
+    helmet({
+      // A API não serve HTML; a CSP restritiva vive na rota de arquivos.
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: false,
+    }),
+  );
 
   // Em desenvolvimento o frontend roda em outra porta, então a origem precisa ser
   // liberada explicitamente. `cors()` sem argumento libera qualquer origem, o que
@@ -53,13 +69,31 @@ export function criarApp() {
   app.use(
     (
       erro: unknown,
-      _req: express.Request,
+      req: express.Request,
       res: express.Response,
       _next: express.NextFunction,
     ) => {
-      console.error('Erro não tratado:', erro);
+      // NUNCA serialize o objeto de erro aqui. O PrismaClientValidationError
+      // imprime a invocação COM os valores dos argumentos — chassi de veículo,
+      // descrição de item, e potencialmente CPF e endereço de cliente foram
+      // confirmados no log durante a auditoria. Só nome, código e rota.
+      const referencia = randomUUID().slice(0, 8);
+      const nome = erro instanceof Error ? erro.name : 'ErroDesconhecido';
+      const codigo = (erro as { code?: unknown })?.code;
+      console.error(
+        `[${referencia}] ${nome}${codigo ? ` (${String(codigo)})` : ''} em ${req.method} ${req.path}`,
+      );
+
       if (res.headersSent) return;
-      res.status(500).json({ error: 'Algo deu errado. Tente novamente.' });
+
+      // Corpo JSON malformado é erro do cliente, não do servidor.
+      const status = (erro as { status?: number; statusCode?: number })?.status
+        ?? (erro as { statusCode?: number })?.statusCode;
+      if (status === 400 || nome === 'SyntaxError') {
+        return res.status(400).json({ error: 'Requisição malformada.', ref: referencia });
+      }
+
+      res.status(500).json({ error: 'Algo deu errado. Tente novamente.', ref: referencia });
     },
   );
 

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { empresaDaRequisicao, rotaDaEmpresa } from '../middleware/authMiddleware';
 
@@ -75,10 +76,21 @@ router.put('/:id', async (req, res) => {
   // updateMany em vez de update: o `where` composto garante que só uma linha da
   // própria empresa é alcançada, e o count permite responder 404 em vez de vazar
   // a existência de um cliente de outra empresa.
-  const { count } = await prisma.client.updateMany({
-    where: { id, company_id: empresaDaRequisicao(req) },
-    data: dados,
-  });
+  //
+  // O try/catch existe porque o POST já mapeava P2002 para 400 e o PUT não —
+  // a mesma violação de unicidade devolvia 500 conforme o verbo.
+  let count: number;
+  try {
+    ({ count } = await prisma.client.updateMany({
+      where: { id, company_id: empresaDaRequisicao(req) },
+      data: dados,
+    }));
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return res.status(409).json({ error: 'Já existe outro cliente com esse CPF ou CNPJ.' });
+    }
+    return res.status(400).json({ error: 'Não foi possível atualizar o cliente.' });
+  }
 
   if (count === 0) {
     return res.status(404).json({ error: 'Cliente não encontrado.' });

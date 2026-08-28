@@ -79,7 +79,7 @@ export function processarItens(itemsBruto: unknown, descontoBruto: unknown): Res
     if (!descricao) return { erro: `Descreva o item ${posicao}.` };
 
     const quantidade = Number(item.quantity);
-    if (!Number.isFinite(quantidade) || quantidade <= 0) {
+    if (!Number.isFinite(quantidade) || quantidade <= 0 || quantidade > 1_000_000) {
       return { erro: `A quantidade do item ${posicao} é inválida.` };
     }
 
@@ -89,7 +89,14 @@ export function processarItens(itemsBruto: unknown, descontoBruto: unknown): Res
         ? Number(item.unit_price_cents)
         : paraCentavos(item.unit_price);
 
-    if (precoUnitario === null || !Number.isFinite(precoUnitario) || precoUnitario < 0) {
+    // Number.isSafeInteger, não só isFinite: 1e30 é finito, passa, e estoura o
+    // Int do banco — o Prisma lança e a resposta vira 500.
+    if (
+      precoUnitario === null ||
+      !Number.isSafeInteger(precoUnitario) ||
+      precoUnitario < 0 ||
+      precoUnitario > 1_000_000_000_00
+    ) {
       return { erro: `O preço do item ${posicao} é inválido.` };
     }
 

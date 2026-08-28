@@ -21,7 +21,7 @@ type DadosVeiculo = {
   km?: number | null;
 };
 
-function extrairCampos(body: unknown): DadosVeiculo {
+function extrairCampos(body: unknown): DadosVeiculo | { __erro: string } {
   const dados: DadosVeiculo = {};
   if (typeof body !== 'object' || body === null) return dados;
   const origem = body as Record<string, unknown>;
@@ -42,10 +42,17 @@ function extrairCampos(body: unknown): DadosVeiculo {
     if (valor === undefined) continue;
     if (valor === null || valor === '') {
       dados[campo] = null;
-    } else {
-      const numero = Number(valor);
-      if (Number.isFinite(numero)) dados[campo] = Math.trunc(numero);
+      continue;
     }
+    const numero = Number(valor);
+    // Number.isFinite não basta: 1e30 é finito, passa, e estoura o Int do banco
+    // — o Prisma lança e a resposta vira 500 com dump de PII no log.
+    if (!Number.isFinite(numero)) return { __erro: `O valor de ${campo} é inválido.` };
+    const inteiro = Math.trunc(numero);
+    if (!Number.isSafeInteger(inteiro) || inteiro < 0 || inteiro > 2_000_000_000) {
+      return { __erro: `O valor de ${campo} está fora da faixa aceita.` };
+    }
+    dados[campo] = inteiro;
   }
 
   if (typeof origem.client_id === 'string' && origem.client_id.trim() !== '') {
@@ -83,6 +90,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const dados = extrairCampos(req.body);
+  if ('__erro' in dados) return res.status(400).json({ error: dados.__erro });
 
   if (!dados.plate) {
     return res.status(400).json({ error: 'A placa é obrigatória.' });
@@ -112,6 +120,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const dados = extrairCampos(req.body);
+  if ('__erro' in dados) return res.status(400).json({ error: dados.__erro });
 
   if (dados.plate !== undefined && !dados.plate) {
     return res.status(400).json({ error: 'A placa não pode ficar em branco.' });

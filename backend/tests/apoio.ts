@@ -8,6 +8,9 @@ const ARQUIVO = path.resolve(__dirname, 'teste.db');
 process.env.DATABASE_URL = `file:${ARQUIVO}`;
 process.env.JWT_SECRET = 'segredo-de-teste-suficientemente-longo';
 process.env.NODE_ENV = 'test';
+// Limite por IP desligado: a suíte cria dezenas de contas do mesmo endereço. O
+// bloqueio por tentativas erradas é por conta, continua ativo e continua testado.
+process.env.RATE_LIMIT_DISABLED = '1';
 
 export const BASE = 'http://127.0.0.1:3998';
 

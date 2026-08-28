@@ -31,7 +31,11 @@ const CAMPOS_PUBLICOS = {
 // A suíte de testes cria dezenas de contas do mesmo endereço, então o limite por
 // IP é desligado ali. O bloqueio por tentativas erradas (que é por conta, não por
 // IP) continua valendo e continua sendo testado.
-const limitePorIpDesligado = process.env.NODE_ENV === 'test';
+//
+// Variável dedicada em vez de NODE_ENV: ferramenta de deploy mexe em NODE_ENV por
+// conta própria, e o efeito de errar aqui é silencioso — nada quebra, só some a
+// proteção.
+const limitePorIpDesligado = process.env.RATE_LIMIT_DISABLED === '1';
 
 const limiteLogin = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -50,6 +54,11 @@ const limiteCadastro = rateLimit({
   skip: () => limitePorIpDesligado,
   message: { error: 'Muitas contas criadas a partir daqui. Tente novamente mais tarde.' },
 });
+
+// Hash bem formado que nunca confere. Existe para o caminho "usuário não existe"
+// gastar o mesmo tempo de argon2 do caminho real.
+const HASH_DE_COMPARACAO =
+  '$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHQ$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 const normalizarEmail = (valor: unknown) =>
   typeof valor === 'string' ? valor.trim().toLowerCase() : '';
@@ -85,9 +94,17 @@ router.post('/register', limiteCadastro, async (req, res) => {
     return res.status(400).json({ error: problemaSenha });
   }
 
+  // Responder 409 para e-mail existente e 200 para novo transforma o cadastro num
+  // oráculo: qualquer um descobre quem tem conta no sistema. A resposta é a mesma
+  // nos dois casos, e o tempo é equalizado pelo hash abaixo.
   const jaExiste = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (jaExiste) {
-    return res.status(409).json({ error: 'Já existe uma conta com esse e-mail.' });
+    await gerarHash(senha as string);
+    return res.status(202).json({
+      pendente: true,
+      message:
+        'Se este e-mail ainda não tiver conta, ela será criada. Verifique sua caixa de entrada.',
+    });
   }
 
   // `role` não é lido do corpo: ninguém se promove a admin no cadastro.
@@ -123,19 +140,26 @@ router.post('/login', limiteLogin, async (req, res) => {
   if (!usuario) {
     // Gasta um tempo comparável ao de uma verificação real, para que a diferença
     // de resposta não revele se o e-mail existe.
-    await conferirSenha('$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHQ$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', senha);
+    await conferirSenha(HASH_DE_COMPARACAO, senha);
     return recusar();
   }
 
   if (usuario.locked_until && usuario.locked_until > new Date()) {
-    const minutos = Math.ceil((usuario.locked_until.getTime() - Date.now()) / 60000);
-    return res.status(429).json({
-      error: `Conta bloqueada por tentativas incorretas. Tente de novo em ${minutos} min.`,
-    });
+    // Mesma resposta de credencial errada: dizer "bloqueada" confirma que a conta
+    // existe, e o bloqueio responderia em milissegundos, sem passar pelo hash.
+    await conferirSenha(HASH_DE_COMPARACAO, senha);
+    return recusar();
   }
 
+  // O bloqueio expirou: zerar o contador. Sem isto ele só zerava num login
+  // bem-sucedido — que é justamente o que o bloqueio impede. O contador ficava em
+  // 5 para sempre, e uma única senha errada a cada 15 min mantinha qualquer conta
+  // fora do ar indefinidamente, sem o atacante precisar saber a senha.
+  const contadorBase =
+    usuario.locked_until && usuario.locked_until <= new Date() ? 0 : usuario.failed_login_count;
+
   if (!(await conferirSenha(usuario.password, senha))) {
-    const tentativas = usuario.failed_login_count + 1;
+    const tentativas = contadorBase + 1;
     await prisma.user.update({
       where: { id: usuario.id },
       data: {
@@ -248,7 +272,7 @@ router.post('/impersonate', exigirAutenticacao, async (req, res) => {
   responderComToken(res, usuario, usuario);
 });
 
-router.post('/change-password', exigirAutenticacao, async (req, res) => {
+router.post('/change-password', limiteLogin, exigirAutenticacao, async (req, res) => {
   const atual = req.body?.current_password;
   const nova = req.body?.new_password;
 
@@ -259,6 +283,19 @@ router.post('/change-password', exigirAutenticacao, async (req, res) => {
   if (!usuario) return res.status(401).json({ error: 'Sessão inválida.' });
 
   if (typeof atual !== 'string' || !(await conferirSenha(usuario.password, atual))) {
+    // Contabiliza no mesmo contador do login: sem isso a senha atual podia ser
+    // adivinhada sem limite e sem deixar rastro.
+    const tentativas = usuario.failed_login_count + 1;
+    await prisma.user.update({
+      where: { id: usuario.id },
+      data: {
+        failed_login_count: tentativas,
+        locked_until:
+          tentativas >= TENTATIVAS_ATE_BLOQUEIO
+            ? new Date(Date.now() + MINUTOS_BLOQUEIO * 60_000)
+            : null,
+      },
+    });
     return res.status(401).json({ error: 'A senha atual está incorreta.' });
   }
 
