@@ -84,13 +84,16 @@ export const api = {
   upload: async (arquivos: FileList | File[]) => {
     const form = new FormData();
     Array.from(arquivos).forEach((arquivo) => form.append('files', arquivo));
-    return requisicao<{ files: { url: string; name: string; size: number }[] }>('/api/upload', {
-      method: 'POST',
-      body: form,
-    });
+    return requisicao<{ files: ArquivoEnviado[] }>('/api/upload', { method: 'POST', body: form });
   },
 
-  /** Transforma um caminho relativo devolvido pelo upload em URL absoluta. */
+  /**
+   * Completa uma URL de arquivo com a base da API.
+   *
+   * Preserva a query string intacta: é nela que viaja a assinatura (`?t=`) que
+   * permite ao `<img>` e ao `<a>` buscarem o arquivo sem header — o browser faz
+   * essas requisições sozinho e não envia Authorization.
+   */
   urlArquivo: (caminho: string) => (caminho.startsWith('http') ? caminho : `${BASE_URL}${caminho}`),
 };
 
@@ -114,6 +117,17 @@ export function lerItens(bruto: unknown): Item[] {
     return [];
   }
 }
+
+export type ArquivoEnviado = {
+  id: string;
+  /** Referência estável, a que se persiste. Não expira. */
+  url: string;
+  /** URL assinada, pronta para renderizar. Expira — nunca gravar no banco. */
+  view_url: string;
+  name: string;
+  size: number;
+  mime: string;
+};
 
 export type Item = {
   type: 'service' | 'part';

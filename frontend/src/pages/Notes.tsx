@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, StickyNote, Paperclip, X } from 'lucide-react';
-import { api, formatarData } from '../lib/api';
+import { api, formatarData, type ArquivoEnviado } from '../lib/api';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
 import { SkeletonCards } from '../components/Skeleton';
@@ -12,7 +12,8 @@ type Nota = {
   content: string | null;
   type: string;
   related_id: string | null;
-  file_urls: string | null;
+  /** Já resolvidos pelo servidor, com URL assinada pronta para o <a href>. */
+  files: ArquivoEnviado[];
   createdAt: string;
 };
 
@@ -25,23 +26,13 @@ const TIPOS = [
 
 const rotuloTipo = (tipo: string) => TIPOS.find((t) => t.value === tipo)?.label ?? tipo;
 
-const lerAnexos = (bruto: string | null): string[] => {
-  if (!bruto) return [];
-  try {
-    const lista = JSON.parse(bruto);
-    return Array.isArray(lista) ? lista.filter((u) => typeof u === 'string') : [];
-  } catch {
-    return [];
-  }
-};
-
 const Notes = () => {
   const queryClient = useQueryClient();
   const [busca, setBusca] = useState('');
   const [tipo, setTipo] = useState('');
   const [aberto, setAberto] = useState(false);
   const [editando, setEditando] = useState<Nota | null>(null);
-  const [anexos, setAnexos] = useState<string[]>([]);
+  const [anexos, setAnexos] = useState<ArquivoEnviado[]>([]);
   const [enviandoArquivo, setEnviandoArquivo] = useState(false);
   const [erro, setErro] = useState('');
   const [tipoSelecionado, setTipoSelecionado] = useState('general');
@@ -122,7 +113,7 @@ const Notes = () => {
 
   const abrir = (nota: Nota | null) => {
     setEditando(nota);
-    setAnexos(lerAnexos(nota?.file_urls ?? null));
+    setAnexos(nota?.files ?? []);
     setTipoSelecionado(nota?.type ?? 'general');
     setVinculo(nota?.related_id ?? '');
     setErro('');
@@ -144,7 +135,7 @@ const Notes = () => {
     setEnviandoArquivo(true);
     try {
       const { files } = await api.upload(arquivos);
-      setAnexos((atuais) => [...atuais, ...files.map((f) => f.url)]);
+      setAnexos((atuais) => [...atuais, ...files]);
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Não foi possível enviar o arquivo.');
     } finally {
@@ -162,7 +153,8 @@ const Notes = () => {
       // Nota geral não carrega vínculo, mesmo que um tenha sido escolhido antes
       // de a pessoa trocar o tipo.
       related_id: tipoSelecionado === 'general' ? null : vinculo || null,
-      file_urls: anexos,
+      // Persiste a referência estável, nunca a URL assinada — ela expira.
+      file_urls: anexos.map((a) => a.url),
     });
   };
 
@@ -225,7 +217,7 @@ const Notes = () => {
       ) : (
         <div className="grid-cards">
           {filtradas.map((nota) => {
-            const arquivos = lerAnexos(nota.file_urls);
+            const arquivos = nota.files ?? [];
             return (
               <article key={nota.id} className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
@@ -253,16 +245,17 @@ const Notes = () => {
 
                 {arquivos.length > 0 && (
                   <div style={{ marginTop: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    {arquivos.map((url, i) => (
+                    {arquivos.map((arquivo) => (
                       <a
-                        key={url}
-                        href={api.urlArquivo(url)}
+                        key={arquivo.id}
+                        href={api.urlArquivo(arquivo.view_url)}
                         target="_blank"
                         rel="noreferrer"
+                        download={arquivo.name}
                         className="btn-secondary"
                         style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.8125rem' }}
                       >
-                        <Paperclip size={14} /> Anexo {i + 1}
+                        <Paperclip size={14} /> {arquivo.name}
                       </a>
                     ))}
                   </div>
@@ -351,15 +344,15 @@ const Notes = () => {
                   )}
                   {anexos.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.5rem' }}>
-                      {anexos.map((url, i) => (
+                      {anexos.map((arquivo, i) => (
                         <span
-                          key={url}
+                          key={arquivo.id}
                           style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem', padding: '0.25rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem' }}
                         >
-                          <Paperclip size={14} /> Anexo {i + 1}
+                          <Paperclip size={14} /> {arquivo.name}
                           <button
                             type="button"
-                            onClick={() => setAnexos((a) => a.filter((u) => u !== url))}
+                            onClick={() => setAnexos((a) => a.filter((x) => x.id !== arquivo.id))}
                             aria-label={`Remover anexo ${i + 1}`}
                             style={{ display: 'flex', color: 'var(--status-cancelled)' }}
                           >
