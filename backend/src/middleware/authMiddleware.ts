@@ -13,11 +13,40 @@ import { ehAdmin, type Papel } from '../lib/roles';
 declare global {
   namespace Express {
     interface Request {
-      usuario: { id: string; role: Papel; company_id: string | null };
-      /// Só existe depois de `exigirEmpresa`. String não vazia, garantida.
-      companyId: string;
+      usuario?: { id: string; role: Papel; company_id: string | null };
+      /// OPCIONAL de propósito. Só existe depois de `exigirEmpresa`.
+      /// Não leia direto: use `empresaDaRequisicao(req)`.
+      companyId?: string;
     }
   }
+}
+
+/**
+ * A empresa da requisição, garantida como string não vazia.
+ *
+ * Existe porque o tipo antes declarava `companyId: string` não-opcional, e a
+ * garantia morava num comentário. Qualquer rota que esquecesse `exigirEmpresa`
+ * compilava e entregava `undefined` a um `where` do Prisma — que não filtra nada
+ * e devolve todos os tenants. Agora o compilador recusa o acesso direto, e este
+ * acessor falha alto em vez de vazar em silêncio.
+ */
+export function empresaDaRequisicao(req: Request): string {
+  const empresa = req.companyId;
+  if (typeof empresa !== 'string' || empresa === '') {
+    throw new Error(
+      'Rota sem escopo de empresa: aplique `rotaDaEmpresa` (ou `exigirEmpresa`) antes de consultar dados de negócio.',
+    );
+  }
+  return empresa;
+}
+
+/** O usuário autenticado, garantido. Só após `exigirAutenticacao`. */
+export function usuarioDaRequisicao(req: Request): { id: string; role: Papel; company_id: string | null } {
+  const usuario = req.usuario;
+  if (!usuario) {
+    throw new Error('Rota sem autenticação: aplique `exigirAutenticacao` antes de ler o usuário.');
+  }
+  return usuario;
 }
 
 function lerToken(req: Request): string | null {
@@ -28,7 +57,7 @@ function lerToken(req: Request): string | null {
   return valor;
 }
 
-/** Exige um token válido. Popula `req.usuario`. */
+/** Exige um token de sessão válido. Popula `req.usuario`. */
 export function exigirAutenticacao(req: Request, res: Response, next: NextFunction) {
   const token = lerToken(req);
   if (!token) {
@@ -59,7 +88,7 @@ export function exigirEmpresa(req: Request, res: Response, next: NextFunction) {
     });
   }
 
-  req.companyId = empresa;
+  req.companyId = empresa.trim();
   next();
 }
 

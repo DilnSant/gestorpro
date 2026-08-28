@@ -10,7 +10,7 @@ import {
   validarSenha,
 } from '../lib/auth';
 import { PAPEL_PADRAO, type Papel } from '../lib/roles';
-import { exigirAutenticacao } from '../middleware/authMiddleware';
+import { exigirAutenticacao, usuarioDaRequisicao } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -161,7 +161,7 @@ router.post('/login', limiteLogin, async (req, res) => {
 /** Quem sou eu — usado pelo frontend para restaurar a sessão ao abrir o app. */
 router.get('/me', exigirAutenticacao, async (req, res) => {
   const usuario = await prisma.user.findUnique({
-    where: { id: req.usuario.id },
+    where: { id: usuarioDaRequisicao(req).id },
     select: { ...CAMPOS_PUBLICOS, company: true },
   });
   if (!usuario) return res.status(401).json({ error: 'Sessão inválida.' });
@@ -177,7 +177,7 @@ router.post('/setup-company', exigirAutenticacao, async (req, res) => {
   }
 
   const atual = await prisma.user.findUnique({
-    where: { id: req.usuario.id },
+    where: { id: usuarioDaRequisicao(req).id },
     select: { company_id: true, role: true },
   });
   if (!atual) return res.status(401).json({ error: 'Sessão inválida.' });
@@ -202,7 +202,7 @@ router.post('/setup-company', exigirAutenticacao, async (req, res) => {
         },
       });
       return tx.user.update({
-        where: { id: req.usuario.id },
+        where: { id: usuarioDaRequisicao(req).id },
         data: { company_id: empresa.id },
         select: { ...CAMPOS_PUBLICOS, company: true },
       });
@@ -222,7 +222,7 @@ router.post('/setup-company', exigirAutenticacao, async (req, res) => {
  * no banco não teria efeito nenhum sobre as requisições seguintes.
  */
 router.post('/impersonate', exigirAutenticacao, async (req, res) => {
-  if (req.usuario.role !== 'admin') {
+  if (usuarioDaRequisicao(req).role !== 'admin') {
     return res.status(404).json({ error: 'Não encontrado.' });
   }
 
@@ -240,7 +240,7 @@ router.post('/impersonate', exigirAutenticacao, async (req, res) => {
   }
 
   const usuario = await prisma.user.update({
-    where: { id: req.usuario.id },
+    where: { id: usuarioDaRequisicao(req).id },
     data: { company_id: alvo },
     select: { ...CAMPOS_PUBLICOS, company: true },
   });
@@ -255,7 +255,7 @@ router.post('/change-password', exigirAutenticacao, async (req, res) => {
   const problema = validarSenha(nova);
   if (problema) return res.status(400).json({ error: problema });
 
-  const usuario = await prisma.user.findUnique({ where: { id: req.usuario.id } });
+  const usuario = await prisma.user.findUnique({ where: { id: usuarioDaRequisicao(req).id } });
   if (!usuario) return res.status(401).json({ error: 'Sessão inválida.' });
 
   if (typeof atual !== 'string' || !(await conferirSenha(usuario.password, atual))) {

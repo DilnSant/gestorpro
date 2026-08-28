@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../prisma';
 import { paraReais } from '../lib/dinheiro';
-import { exigirAdmin, exigirAutenticacao, rotaDaEmpresa } from '../middleware/authMiddleware';
+import { empresaDaRequisicao, exigirAdmin, exigirAutenticacao, rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -75,7 +75,7 @@ router.get('/admin/all', exigirAutenticacao, exigirAdmin, async (_req, res) => {
 router.use(rotaDaEmpresa);
 
 router.get('/', async (req, res) => {
-  const empresa = await prisma.company.findUnique({ where: { id: req.companyId } });
+  const empresa = await prisma.company.findUnique({ where: { id: empresaDaRequisicao(req) } });
   if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
   res.json(empresa);
 });
@@ -91,7 +91,7 @@ router.put('/', async (req, res) => {
   try {
     // updateMany garante que a empresa alterada é a da requisição.
     const { count } = await prisma.company.updateMany({
-      where: { id: req.companyId },
+      where: { id: empresaDaRequisicao(req) },
       data: dados,
     });
     if (count === 0) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -99,13 +99,13 @@ router.put('/', async (req, res) => {
     return res.status(409).json({ error: 'Já existe outra empresa com esse CNPJ ou domínio.' });
   }
 
-  const empresa = await prisma.company.findUnique({ where: { id: req.companyId } });
+  const empresa = await prisma.company.findUnique({ where: { id: empresaDaRequisicao(req) } });
   res.json(empresa);
 });
 
 /** Números do painel inicial, calculados no banco em vez de na tela. */
 router.get('/dashboard', async (req, res) => {
-  const companyId = req.companyId;
+  const companyId = empresaDaRequisicao(req);
   const inicioDoMes = new Date();
   inicioDoMes.setDate(1);
   inicioDoMes.setHours(0, 0, 0, 0);

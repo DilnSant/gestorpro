@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../prisma';
-import { rotaDaEmpresa } from '../middleware/authMiddleware';
+import { empresaDaRequisicao, rotaDaEmpresa } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -67,7 +67,7 @@ function extrairCampos(body: unknown): DadosNota | { __erro: string } {
 
 router.get('/', async (req, res) => {
   const notes = await prisma.note.findMany({
-    where: { company_id: req.companyId },
+    where: { company_id: empresaDaRequisicao(req) },
     orderBy: { createdAt: 'desc' },
   });
   res.json(notes);
@@ -83,7 +83,7 @@ router.post('/', async (req, res) => {
 
   try {
     const note = await prisma.note.create({
-      data: { ...dados, title: dados.title, company_id: req.companyId },
+      data: { ...dados, title: dados.title, company_id: empresaDaRequisicao(req) },
     });
     res.status(201).json(note);
   } catch (error) {
@@ -100,20 +100,20 @@ router.put('/:id', async (req, res) => {
   }
 
   const { count } = await prisma.note.updateMany({
-    where: { id: req.params.id, company_id: req.companyId },
+    where: { id: req.params.id, company_id: empresaDaRequisicao(req) },
     data: dados,
   });
   if (count === 0) return res.status(404).json({ error: 'Nota não encontrada.' });
 
   const note = await prisma.note.findFirst({
-    where: { id: req.params.id, company_id: req.companyId },
+    where: { id: req.params.id, company_id: empresaDaRequisicao(req) },
   });
   res.json(note);
 });
 
 router.delete('/:id', async (req, res) => {
   const { count } = await prisma.note.deleteMany({
-    where: { id: req.params.id, company_id: req.companyId },
+    where: { id: req.params.id, company_id: empresaDaRequisicao(req) },
   });
   if (count === 0) return res.status(404).json({ error: 'Nota não encontrada.' });
   res.status(204).send();

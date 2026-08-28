@@ -9,6 +9,7 @@ import quoteRoutes from './routes/quotes';
 import noteRoutes from './routes/notes';
 import companyRoutes from './routes/company';
 import uploadRoutes, { PASTA_UPLOADS } from './routes/upload';
+import fileRoutes from './routes/files';
 
 /**
  * Monta o app sem abrir porta.
@@ -42,6 +43,7 @@ export function criarApp() {
   app.use('/api/notes', noteRoutes);
   app.use('/api/company', companyRoutes);
   app.use('/api/upload', uploadRoutes);
+  app.use('/api/files', fileRoutes);
 
   // Rede de segurança: sem isto, um erro não tratado dentro de um handler async
   // derruba a requisição sem resposta e vaza o stack trace na saída padrão.

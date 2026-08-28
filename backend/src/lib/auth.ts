@@ -44,7 +44,14 @@ export const assinarToken = (dados: ConteudoToken) =>
 
 export function verificarToken(token: string): ConteudoToken | null {
   try {
-    const conteudo = jwt.verify(token, SEGREDO) as jwt.JwtPayload;
+    // `algorithms` fixado: sem isso, o comportamento depende do padrão da
+    // biblioteca, que pode mudar entre versões.
+    const conteudo = jwt.verify(token, SEGREDO, { algorithms: ['HS256'] }) as jwt.JwtPayload;
+
+    // Token de arquivo carrega `aud` e nunca pode servir como token de sessão.
+    // Ele já é assinado com outro segredo; esta é a segunda barreira.
+    if (conteudo.aud !== undefined) return null;
+
     if (typeof conteudo.sub !== 'string') return null;
     return {
       sub: conteudo.sub,
