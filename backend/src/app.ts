@@ -81,12 +81,30 @@ export function criarApp() {
         .replace(/\s+/g, ' ')
         .slice(0, 400);
 
+      // O pooler do Supabase exige o identificador do projeto no nome de
+      // usuário. Com `postgres` puro ele responde "no tenant identifier
+      // provided", que o Prisma traduz como credencial inválida — mensagem que
+      // manda procurar senha errada quando o problema é o usuário.
+      let comoCorrigir: string | undefined;
+      try {
+        const url = new URL(process.env.DATABASE_URL ?? '');
+        if (url.hostname.includes('pooler.supabase.com') && url.username === 'postgres') {
+          const ref = new URL(process.env.DIRECT_URL ?? '').hostname.split('.')[1] ?? '<ref>';
+          comoCorrigir =
+            `O DATABASE_URL usa o pooler mas o usuário é "postgres". ` +
+            `O pooler exige "postgres.${ref}". Troque só o usuário e refaça o deploy.`;
+        }
+      } catch {
+        comoCorrigir = 'O DATABASE_URL não é uma URL válida.';
+      }
+
       res.status(503).json({
         ok: false,
         db: 'indisponível',
         codigo,
         nome,
         motivo,
+        ...(comoCorrigir ? { comoCorrigir } : {}),
         // Quais variáveis o runtime enxerga. Só a presença, nunca o valor.
         variaveis: {
           DATABASE_URL: Boolean(process.env.DATABASE_URL),
